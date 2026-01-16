@@ -28,6 +28,20 @@ pub struct DispatchRecord {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationComment {
+    pub id: String,
+    pub author_label: String,
+    pub body: String,
+    pub created_label: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NotificationDetail {
+    pub record: DispatchRecord,
+    pub comments: Vec<NotificationComment>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WerkaHomeSummary {
     pub pending_count: i64,
     pub confirmed_count: i64,
@@ -182,6 +196,13 @@ pub struct WerkaUnannouncedCreateRequest {
     pub supplier_ref: String,
     pub item_code: String,
     pub qty: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupplierUnannouncedResponseRequest {
+    pub receipt_id: String,
+    pub approve: bool,
+    pub reason: String,
 }
 
 fn is_zero(value: &f64) -> bool {

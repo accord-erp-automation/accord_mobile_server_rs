@@ -7,6 +7,8 @@ mod profile_route_tests;
 #[cfg(test)]
 mod router_tests;
 #[cfg(test)]
+mod supplier_unannounced_route_tests;
+#[cfg(test)]
 mod werka_archive_route_tests;
 #[cfg(test)]
 mod werka_customer_issue_route_tests;

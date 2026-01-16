@@ -11,8 +11,8 @@ use crate::core::werka::models::{
 };
 use crate::core::werka::ports::{
     CreateDeliveryNoteInput, CreatePurchaseReceiptInput, CustomerIssueSourceLookup,
-    DeliveryNoteStateUpdate, WerkaCustomerIssueWriter, WerkaHomeLookup, WerkaPortError,
-    WerkaSupplierAdminStateLookup, WerkaUnannouncedWriter,
+    DeliveryNoteStateUpdate, SupplierUnannouncedWriter, WerkaCustomerIssueWriter, WerkaHomeLookup,
+    WerkaPortError, WerkaSupplierAdminStateLookup, WerkaUnannouncedWriter,
 };
 use crate::core::werka::unannounced::{
     format_notification_comment, purchase_receipt_to_dispatch_record, supplier_admin_state,
@@ -30,6 +30,7 @@ pub struct WerkaService {
     customer_issue_writer: Option<Arc<dyn WerkaCustomerIssueWriter>>,
     customer_issue_source_lookup: Option<Arc<dyn CustomerIssueSourceLookup>>,
     unannounced_writer: Option<Arc<dyn WerkaUnannouncedWriter>>,
+    pub(crate) supplier_unannounced_writer: Option<Arc<dyn SupplierUnannouncedWriter>>,
     supplier_admin_state_lookup: Option<Arc<dyn WerkaSupplierAdminStateLookup>>,
 }
 
@@ -62,6 +63,14 @@ impl WerkaService {
     #[allow(dead_code)]
     pub fn with_unannounced_writer(mut self, writer: Arc<dyn WerkaUnannouncedWriter>) -> Self {
         self.unannounced_writer = Some(writer);
+        self
+    }
+
+    pub fn with_supplier_unannounced_writer(
+        mut self,
+        writer: Arc<dyn SupplierUnannouncedWriter>,
+    ) -> Self {
+        self.supplier_unannounced_writer = Some(writer);
         self
     }
 

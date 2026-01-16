@@ -164,6 +164,25 @@ pub struct PurchaseReceiptDraft {
     pub remarks: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PurchaseReceiptSubmissionResult {
+    pub name: String,
+    pub supplier: String,
+    pub item_code: String,
+    pub uom: String,
+    pub sent_qty: f64,
+    pub accepted_qty: f64,
+    pub supplier_delivery_note: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PurchaseReceiptComment {
+    pub id: String,
+    pub content: String,
+    pub created_at: String,
+}
+
 #[async_trait]
 pub trait WerkaCustomerIssueWriter: Send + Sync {
     async fn get_items_by_codes(&self, codes: &[String]) -> Result<Vec<ErpItem>, WerkaPortError>;
@@ -221,6 +240,37 @@ pub trait WerkaSupplierAdminStateLookup: Send + Sync {
         &self,
         supplier_ref: &str,
     ) -> Result<WerkaSupplierAdminState, WerkaPortError>;
+}
+
+#[async_trait]
+pub trait SupplierUnannouncedWriter: Send + Sync {
+    async fn get_purchase_receipt(
+        &self,
+        name: &str,
+    ) -> Result<PurchaseReceiptDraft, WerkaPortError>;
+    async fn update_purchase_receipt_remarks(
+        &self,
+        name: &str,
+        remarks: &str,
+    ) -> Result<(), WerkaPortError>;
+    async fn confirm_and_submit_purchase_receipt(
+        &self,
+        name: &str,
+        accepted_qty: f64,
+        returned_qty: f64,
+        return_reason: &str,
+        return_comment: &str,
+    ) -> Result<PurchaseReceiptSubmissionResult, WerkaPortError>;
+    async fn add_purchase_receipt_comment(
+        &self,
+        name: &str,
+        content: &str,
+    ) -> Result<(), WerkaPortError>;
+    async fn list_purchase_receipt_comments(
+        &self,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<PurchaseReceiptComment>, WerkaPortError>;
 }
 
 #[async_trait]
