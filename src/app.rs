@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 use crate::core::auth::service::AuthService;
 use crate::core::profile::service::ProfileService;
 use crate::core::session::manager::SessionManager;
+use crate::core::werka::service::WerkaService;
 use crate::erpnext::client::ErpnextClient;
 use crate::store::admin_state_store::AdminSupplierStateStore;
 
@@ -12,6 +13,7 @@ pub struct AppState {
     pub config: Arc<AppConfig>,
     pub auth: AuthService,
     pub profiles: ProfileService,
+    pub werka: WerkaService,
     pub sessions: SessionManager,
 }
 
@@ -19,6 +21,7 @@ impl AppState {
     pub fn new(config: AppConfig) -> Self {
         let mut auth = AuthService::new(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone());
+        let werka = WerkaService::new();
         let sessions = SessionManager::persistent(
             config.session_store_path.clone(),
             config.session_ttl_seconds,
@@ -59,6 +62,7 @@ impl AppState {
             config: Arc::new(config),
             auth,
             profiles,
+            werka,
             sessions,
         }
     }

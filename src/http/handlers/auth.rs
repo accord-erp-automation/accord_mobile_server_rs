@@ -31,10 +31,16 @@ pub async fn login(
             )
         })?;
 
+    let werka_home = if principal.role == PrincipalRole::Werka {
+        state.werka.home(20).await.ok().flatten()
+    } else {
+        None
+    };
+
     Ok(Json(LoginResponse {
         profile: with_avatar_proxy(&headers, principal, &token),
         token,
-        werka_home: None,
+        werka_home,
     }))
 }
 
