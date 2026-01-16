@@ -97,7 +97,7 @@ pub(crate) fn build_werka_home(
     data
 }
 
-fn classify_werka_receipt(row: &PurchaseReceiptSummaryRow) -> (String, bool) {
+pub(crate) fn classify_werka_receipt(row: &PurchaseReceiptSummaryRow) -> (String, bool) {
     classify_werka_receipt_fields(
         row.doc_status,
         &row.status,
@@ -140,7 +140,7 @@ pub(crate) fn classify_werka_receipt_fields(
     (status.to_string(), true)
 }
 
-fn purchase_receipt_to_record(row: &PurchaseReceiptSummaryRow) -> DispatchRecord {
+pub(crate) fn purchase_receipt_to_record(row: &PurchaseReceiptSummaryRow) -> DispatchRecord {
     let mut sent_qty = row.total_qty;
     if let Some(marker_qty) = parse_telegram_receipt_marker_qty(&row.supplier_delivery_note)
         && marker_qty > sent_qty
@@ -171,7 +171,7 @@ fn purchase_receipt_to_record(row: &PurchaseReceiptSummaryRow) -> DispatchRecord
     }
 }
 
-fn delivery_note_to_record(row: &DeliveryNoteSummaryRow) -> DispatchRecord {
+pub(crate) fn delivery_note_to_record(row: &DeliveryNoteSummaryRow) -> DispatchRecord {
     let status = delivery_status(row);
     let (mut accepted_qty, returned_qty) = delivery_note_decision_quantities(row, &status);
     if status == "accepted" && accepted_qty <= 0.0 {
@@ -197,11 +197,11 @@ fn delivery_note_to_record(row: &DeliveryNoteSummaryRow) -> DispatchRecord {
     }
 }
 
-fn delivery_visible(row: &DeliveryNoteSummaryRow) -> bool {
+pub(crate) fn delivery_visible(row: &DeliveryNoteSummaryRow) -> bool {
     row.doc_status == 1 && row.accord_flow_state == DELIVERY_FLOW_STATE_SUBMITTED
 }
 
-fn delivery_status(row: &DeliveryNoteSummaryRow) -> String {
+pub(crate) fn delivery_status(row: &DeliveryNoteSummaryRow) -> String {
     delivery_status_from_state(
         row.doc_status,
         row.accord_flow_state,

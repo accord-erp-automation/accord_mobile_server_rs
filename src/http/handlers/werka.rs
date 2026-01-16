@@ -4,8 +4,26 @@ use axum::http::{HeaderMap, StatusCode};
 
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
+use crate::core::werka::models::{DispatchRecord, WerkaHomeData, WerkaHomeSummary};
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
+
+pub async fn pending(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    let principal = authorize(&state, &headers).await?;
+    require_werka(&principal)?;
+
+    match state.werka.pending(0).await {
+        Ok(Some(items)) => Ok(Json(items)),
+        Ok(None) | Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "pending fetch failed",
+            }),
+        )),
+    }
+}
 
 pub async fn summary(
     State(state): State<AppState>,

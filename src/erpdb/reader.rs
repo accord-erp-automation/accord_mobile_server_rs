@@ -3,11 +3,12 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions};
 use sqlx::{MySqlPool, query_as};
 
 use crate::config::DirectDbConfig;
-use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
+use crate::core::werka::models::{DispatchRecord, WerkaHomeData, WerkaHomeSummary};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::erpdb::werka_home::{
     DeliveryNoteSummaryRow, PurchaseReceiptSummaryRow, build_werka_home,
 };
+use crate::erpdb::werka_pending::build_werka_pending;
 use crate::erpdb::werka_summary::{
     DeliveryNoteStatusRow, PurchaseReceiptStatusRow, build_werka_summary,
 };
@@ -53,6 +54,35 @@ impl DirectDbReader {
 
         Ok(build_werka_summary(&receipts, &delivery_notes))
     }
+
+    async fn pending(&self, limit: usize) -> Result<Vec<DispatchRecord>, sqlx::Error> {
+        let limit = clamp_limit(limit, 1000);
+        let receipts = if limit > 0 {
+            query_as::<_, PurchaseReceiptSummaryRow>(PENDING_PURCHASE_RECEIPT_ROWS_LIMIT_SQL)
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            query_as::<_, PurchaseReceiptSummaryRow>(PENDING_PURCHASE_RECEIPT_ROWS_SQL)
+                .fetch_all(&self.pool)
+                .await?
+        };
+        let mut delivery_query = query_as::<_, DeliveryNoteSummaryRow>(if limit > 0 {
+            PENDING_DELIVERY_NOTE_ROWS_LIMIT_SQL
+        } else {
+            PENDING_DELIVERY_NOTE_ROWS_SQL
+        })
+        .bind(1_i32)
+        .bind(2_i32)
+        .bind(3_i32)
+        .bind(4_i32);
+        if limit > 0 {
+            delivery_query = delivery_query.bind(limit as i64);
+        }
+        let delivery_notes = delivery_query.fetch_all(&self.pool).await?;
+
+        Ok(build_werka_pending(&receipts, &delivery_notes, limit))
+    }
 }
 
 #[async_trait]
@@ -65,6 +95,12 @@ impl WerkaHomeLookup for DirectDbReader {
 
     async fn werka_home(&self, pending_limit: usize) -> Result<WerkaHomeData, WerkaPortError> {
         self.home(pending_limit)
+            .await
+            .map_err(|error| WerkaPortError::Database(error.to_string()))
+    }
+
+    async fn werka_pending(&self, limit: usize) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        self.pending(limit)
             .await
             .map_err(|error| WerkaPortError::Database(error.to_string()))
     }
@@ -130,3 +166,101 @@ const DELIVERY_NOTE_STATUS_ROWS_SQL: &str = r#"
         COALESCE(dn.accord_customer_state, 0) AS accord_customer_state
     FROM `tabDelivery Note` dn
 "#;
+
+const PENDING_PURCHASE_RECEIPT_ROWS_SQL: &str = r#"
+    SELECT
+        pr.name AS name,
+        pr.supplier AS supplier,
+        COALESCE(pr.supplier_name, '') AS supplier_name,
+        pr.docstatus AS doc_status,
+        COALESCE(pr.status, '') AS status,
+        COALESCE(pr.total_qty, 0) AS total_qty,
+        COALESCE(CAST(pr.posting_date AS CHAR), '') AS posting_date,
+        COALESCE(pr.supplier_delivery_note, '') AS supplier_delivery_note,
+        COALESCE(pr.remarks, '') AS remarks,
+        COALESCE(pr.currency, '') AS currency,
+        COALESCE(pri.item_code, '') AS item_code,
+        COALESCE(pri.item_name, '') AS item_name,
+        COALESCE(pri.uom, '') AS uom,
+        COALESCE(pri.amount, 0) AS amount
+    FROM `tabPurchase Receipt` pr
+    LEFT JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name AND pri.idx = 1
+    WHERE pr.supplier_delivery_note LIKE 'TG:%'
+      AND pr.docstatus = 0
+    ORDER BY pr.name DESC
+"#;
+
+const PENDING_PURCHASE_RECEIPT_ROWS_LIMIT_SQL: &str = r#"
+    SELECT
+        pr.name AS name,
+        pr.supplier AS supplier,
+        COALESCE(pr.supplier_name, '') AS supplier_name,
+        pr.docstatus AS doc_status,
+        COALESCE(pr.status, '') AS status,
+        COALESCE(pr.total_qty, 0) AS total_qty,
+        COALESCE(CAST(pr.posting_date AS CHAR), '') AS posting_date,
+        COALESCE(pr.supplier_delivery_note, '') AS supplier_delivery_note,
+        COALESCE(pr.remarks, '') AS remarks,
+        COALESCE(pr.currency, '') AS currency,
+        COALESCE(pri.item_code, '') AS item_code,
+        COALESCE(pri.item_name, '') AS item_name,
+        COALESCE(pri.uom, '') AS uom,
+        COALESCE(pri.amount, 0) AS amount
+    FROM `tabPurchase Receipt` pr
+    LEFT JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name AND pri.idx = 1
+    WHERE pr.supplier_delivery_note LIKE 'TG:%'
+      AND pr.docstatus = 0
+    ORDER BY pr.name DESC
+    LIMIT ?
+"#;
+
+const PENDING_DELIVERY_NOTE_ROWS_SQL: &str = r#"
+    SELECT
+        dn.name AS name,
+        dn.customer AS customer,
+        COALESCE(dn.customer_name, '') AS customer_name,
+        dn.docstatus AS doc_status,
+        COALESCE(CAST(dn.modified AS CHAR), '') AS modified,
+        COALESCE(dn.total_qty, 0) AS qty,
+        COALESCE(dni.returned_qty, 0) AS returned_qty,
+        COALESCE(dn.accord_customer_reason, '') AS customer_reason,
+        COALESCE(dni.item_code, '') AS item_code,
+        COALESCE(dni.item_name, '') AS item_name,
+        COALESCE(dni.uom, '') AS uom,
+        COALESCE(dn.accord_flow_state, 0) AS accord_flow_state,
+        COALESCE(dn.accord_customer_state, 0) AS accord_customer_state
+    FROM `tabDelivery Note` dn
+    LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name AND dni.idx = 1
+    WHERE dn.docstatus = 1
+      AND COALESCE(dn.accord_flow_state, 0) = ?
+      AND COALESCE(dn.accord_customer_state, 0) NOT IN (?, ?, ?)
+    ORDER BY dn.name DESC
+"#;
+
+const PENDING_DELIVERY_NOTE_ROWS_LIMIT_SQL: &str = r#"
+    SELECT
+        dn.name AS name,
+        dn.customer AS customer,
+        COALESCE(dn.customer_name, '') AS customer_name,
+        dn.docstatus AS doc_status,
+        COALESCE(CAST(dn.modified AS CHAR), '') AS modified,
+        COALESCE(dn.total_qty, 0) AS qty,
+        COALESCE(dni.returned_qty, 0) AS returned_qty,
+        COALESCE(dn.accord_customer_reason, '') AS customer_reason,
+        COALESCE(dni.item_code, '') AS item_code,
+        COALESCE(dni.item_name, '') AS item_name,
+        COALESCE(dni.uom, '') AS uom,
+        COALESCE(dn.accord_flow_state, 0) AS accord_flow_state,
+        COALESCE(dn.accord_customer_state, 0) AS accord_customer_state
+    FROM `tabDelivery Note` dn
+    LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name AND dni.idx = 1
+    WHERE dn.docstatus = 1
+      AND COALESCE(dn.accord_flow_state, 0) = ?
+      AND COALESCE(dn.accord_customer_state, 0) NOT IN (?, ?, ?)
+    ORDER BY dn.name DESC
+    LIMIT ?
+"#;
+
+fn clamp_limit(limit: usize, max: usize) -> usize {
+    if limit > max { max } else { limit }
+}

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
+use crate::core::werka::models::{DispatchRecord, WerkaHomeData, WerkaHomeSummary};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 
 #[derive(Clone, Default)]
@@ -36,5 +36,16 @@ impl WerkaService {
         };
 
         lookup.werka_summary().await.map(Some)
+    }
+
+    pub async fn pending(
+        &self,
+        limit: usize,
+    ) -> Result<Option<Vec<DispatchRecord>>, WerkaPortError> {
+        let Some(lookup) = &self.lookup else {
+            return Ok(None);
+        };
+
+        lookup.werka_pending(limit).await.map(Some)
     }
 }

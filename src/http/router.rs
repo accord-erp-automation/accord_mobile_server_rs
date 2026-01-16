@@ -14,6 +14,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/auth/logout", post(auth::logout))
         .route("/v1/mobile/me", get(auth::me))
         .route("/v1/mobile/profile/avatar/view", get(profile::avatar_view))
+        .route("/v1/mobile/werka/pending", any(werka::pending))
         .route("/v1/mobile/werka/summary", any(werka::summary))
         .route("/v1/mobile/werka/home", any(werka::home))
         .layer(TraceLayer::new_for_http())
@@ -45,7 +46,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::core::auth::models::{Principal, PrincipalRole};
     use crate::core::session::manager::SessionManager;
-    use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
+    use crate::core::werka::models::{DispatchRecord, WerkaHomeData, WerkaHomeSummary};
     use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
     use crate::core::werka::service::WerkaService;
 
@@ -358,6 +359,88 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
     }
 
+    #[tokio::test]
+    async fn werka_pending_requires_auth() {
+        let app = build_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mobile/werka/pending")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn werka_pending_fails_without_provider_like_go() {
+        let state = test_state();
+        let token = werka_session(&state).await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mobile/werka/pending")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn werka_pending_returns_provider_payload() {
+        let mut state = test_state();
+        state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaHomeLookup));
+        let token = werka_session(&state).await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/mobile/werka/pending")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(value[0]["id"], "PR-001");
+        assert_eq!(value[0]["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn werka_pending_accepts_post_like_go_handler() {
+        let mut state = test_state();
+        state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaHomeLookup));
+        let token = werka_session(&state).await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mobile/werka/pending")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
     async fn werka_session(state: &AppState) -> String {
         state
             .sessions
@@ -395,6 +478,22 @@ mod tests {
                 },
                 pending_items: Vec::new(),
             })
+        }
+
+        async fn werka_pending(&self, limit: usize) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+            assert_eq!(limit, 0);
+            Ok(vec![DispatchRecord {
+                id: "PR-001".to_string(),
+                supplier_name: "Supplier".to_string(),
+                item_code: "ITEM-001".to_string(),
+                item_name: "Item".to_string(),
+                uom: "Kg".to_string(),
+                sent_qty: 10.0,
+                accepted_qty: 0.0,
+                status: "pending".to_string(),
+                created_label: "2026-01-16".to_string(),
+                ..DispatchRecord::default()
+            }])
         }
     }
 }
