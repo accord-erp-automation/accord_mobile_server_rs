@@ -128,6 +128,52 @@ async fn werka_history_accepts_post_like_go_handler() {
 }
 
 #[tokio::test]
+async fn werka_notifications_aliases_history_like_go() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/notifications")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value[0]["id"], "supplier_ack:COMM-001");
+}
+
+#[tokio::test]
+async fn werka_notifications_accepts_post_like_history() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/werka/notifications")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn werka_status_breakdown_requires_auth() {
     let app = build_router(test_state());
     let response = app
