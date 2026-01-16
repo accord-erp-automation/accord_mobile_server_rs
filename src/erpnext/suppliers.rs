@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::core::auth::ports::{AuthPortError, SupplierLookup, SupplierRecord};
-use crate::core::profile::ports::{ProfileLookup, ProfilePortError, SupplierProfileRecord};
+use crate::core::profile::ports::{
+    CustomerProfileRecord, DownloadedFile, ProfileLookup, ProfilePortError, SupplierProfileRecord,
+};
 use crate::erpnext::client::ErpnextClient;
 
 #[async_trait]
@@ -88,8 +90,42 @@ impl ProfileLookup for ErpnextClient {
     async fn get_customer_profile(
         &self,
         id: &str,
-    ) -> Result<crate::core::profile::ports::CustomerProfileRecord, ProfilePortError> {
+    ) -> Result<CustomerProfileRecord, ProfilePortError> {
         crate::erpnext::customers::get_customer_profile(self, id).await
+    }
+
+    async fn download_file(&self, file_url: &str) -> Result<DownloadedFile, ProfilePortError> {
+        let trimmed = file_url.trim();
+        if trimmed.is_empty() {
+            return Err(ProfilePortError::LookupFailed);
+        }
+        let endpoint = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            trimmed.to_string()
+        } else {
+            format!("{}{}", self.base_url, trimmed)
+        };
+        let response = self
+            .http
+            .get(endpoint)
+            .header(reqwest::header::AUTHORIZATION, self.auth_header())
+            .send()
+            .await
+            .map_err(|_| ProfilePortError::LookupFailed)?
+            .error_for_status()
+            .map_err(|_| ProfilePortError::LookupFailed)?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| ProfilePortError::LookupFailed)?
+            .to_vec();
+
+        Ok(DownloadedFile { content_type, body })
     }
 }
 

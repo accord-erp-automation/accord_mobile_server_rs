@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::ports::{CustomerProfileRecord, ProfileLookup, ProfilePortError, SupplierProfileRecord};
+use super::ports::{
+    CustomerProfileRecord, DownloadedFile, ProfileLookup, ProfilePortError, SupplierProfileRecord,
+};
 use super::service::ProfileService;
 use crate::core::auth::models::{Principal, PrincipalRole};
 
@@ -45,6 +47,28 @@ async fn customer_refresh_updates_phone() {
     assert_eq!(principal.phone, "+998901234568");
 }
 
+#[tokio::test]
+async fn supplier_avatar_download_uses_refreshed_avatar_url() {
+    let service = ProfileService::new("http://erp.test".to_string())
+        .with_erp_lookup(Arc::new(FakeProfileLookup));
+
+    let file = service
+        .download_avatar(Principal {
+            role: PrincipalRole::Supplier,
+            display_name: "Supplier".to_string(),
+            legal_name: "Supplier".to_string(),
+            ref_: "SUP-001".to_string(),
+            phone: "+998900000000".to_string(),
+            avatar_url: String::new(),
+        })
+        .await
+        .expect("download result")
+        .expect("file");
+
+    assert_eq!(file.content_type, "image/png");
+    assert_eq!(file.body, b"png".to_vec());
+}
+
 struct FakeProfileLookup;
 
 #[async_trait]
@@ -65,6 +89,14 @@ impl ProfileLookup for FakeProfileLookup {
     ) -> Result<CustomerProfileRecord, ProfilePortError> {
         Ok(CustomerProfileRecord {
             phone: "+998901234568".to_string(),
+        })
+    }
+
+    async fn download_file(&self, file_url: &str) -> Result<DownloadedFile, ProfilePortError> {
+        assert_eq!(file_url, "http://erp.test/files/supplier.png");
+        Ok(DownloadedFile {
+            content_type: "image/png".to_string(),
+            body: b"png".to_vec(),
         })
     }
 }

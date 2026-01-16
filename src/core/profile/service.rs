@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::profile::ports::ProfileLookup;
+use crate::core::profile::ports::{DownloadedFile, ProfileLookup, ProfilePortError};
 
 #[derive(Clone)]
 pub struct ProfileService {
@@ -50,6 +50,26 @@ impl ProfileService {
         }
 
         principal
+    }
+
+    pub async fn download_avatar(
+        &self,
+        principal: Principal,
+    ) -> Result<Option<DownloadedFile>, ProfilePortError> {
+        if principal.role != PrincipalRole::Supplier {
+            return Ok(None);
+        }
+
+        let current = self.refresh(principal).await;
+        if current.avatar_url.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let Some(lookup) = &self.lookup else {
+            return Err(ProfilePortError::LookupFailed);
+        };
+
+        lookup.download_file(&current.avatar_url).await.map(Some)
     }
 }
 

@@ -64,7 +64,7 @@ pub async fn me(
     Ok(Json(with_avatar_proxy(&headers, principal, &token)))
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<String> {
+pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let raw = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
