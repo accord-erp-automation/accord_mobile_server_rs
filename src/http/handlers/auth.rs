@@ -11,11 +11,12 @@ pub async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let principal = state
+    let mut principal = state
         .auth
         .login(request.phone.trim(), request.code.trim())
         .await
         .map_err(login_error)?;
+    principal = state.profiles.refresh(principal).await;
     let token = state
         .sessions
         .create(principal.clone())
@@ -51,11 +52,12 @@ pub async fn me(
     headers: HeaderMap,
 ) -> Result<Json<Principal>, (StatusCode, Json<ErrorResponse>)> {
     let token = bearer_token(&headers).ok_or_else(unauthorized)?;
-    let principal = state
+    let mut principal = state
         .sessions
         .get(&token)
         .await
         .map_err(|_| unauthorized())?;
+    principal = state.profiles.refresh(principal).await;
     state.sessions.update(&token, principal.clone()).await;
 
     Ok(Json(principal))

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::core::auth::ports::{AuthPortError, SupplierLookup, SupplierRecord};
+use crate::core::profile::ports::{ProfileLookup, ProfilePortError, SupplierProfileRecord};
 use crate::erpnext::client::ErpnextClient;
 
 #[async_trait]
@@ -51,6 +52,47 @@ impl SupplierLookup for ErpnextClient {
     }
 }
 
+#[async_trait]
+impl ProfileLookup for ErpnextClient {
+    async fn get_supplier_profile(
+        &self,
+        id: &str,
+    ) -> Result<SupplierProfileRecord, ProfilePortError> {
+        let payload = self
+            .http
+            .get(format!(
+                "{}/api/resource/Supplier/{}",
+                self.base_url,
+                urlencoding::encode(id.trim())
+            ))
+            .header(reqwest::header::AUTHORIZATION, self.auth_header())
+            .send()
+            .await
+            .map_err(|_| ProfilePortError::LookupFailed)?
+            .error_for_status()
+            .map_err(|_| ProfilePortError::LookupFailed)?
+            .json::<SupplierGetResponse>()
+            .await
+            .map_err(|_| ProfilePortError::LookupFailed)?;
+
+        Ok(SupplierProfileRecord {
+            phone: if payload.data.mobile_no.trim().is_empty() {
+                extract_phone_from_details(&payload.data.supplier_details)
+            } else {
+                payload.data.mobile_no.trim().to_string()
+            },
+            image: payload.data.image.trim().to_string(),
+        })
+    }
+
+    async fn get_customer_profile(
+        &self,
+        id: &str,
+    ) -> Result<crate::core::profile::ports::CustomerProfileRecord, ProfilePortError> {
+        crate::erpnext::customers::get_customer_profile(self, id).await
+    }
+}
+
 fn normalize_limit(limit: usize) -> usize {
     match limit {
         0 => 20,
@@ -73,6 +115,21 @@ struct SupplierListRow {
     mobile_no: String,
     #[serde(default)]
     supplier_details: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SupplierGetResponse {
+    data: SupplierGetRow,
+}
+
+#[derive(Debug, Deserialize)]
+struct SupplierGetRow {
+    #[serde(default)]
+    mobile_no: String,
+    #[serde(default)]
+    supplier_details: String,
+    #[serde(default)]
+    image: String,
 }
 
 fn suppliers_from_list_response(payload: SupplierListResponse) -> Vec<SupplierRecord> {

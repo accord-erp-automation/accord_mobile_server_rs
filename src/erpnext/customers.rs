@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::core::auth::ports::{AuthPortError, CustomerLookup, CustomerRecord};
+use crate::core::profile::ports::{CustomerProfileRecord, ProfilePortError};
 use crate::erpnext::client::ErpnextClient;
 
 #[async_trait]
@@ -51,6 +52,36 @@ impl CustomerLookup for ErpnextClient {
     }
 }
 
+pub async fn get_customer_profile(
+    client: &ErpnextClient,
+    id: &str,
+) -> Result<CustomerProfileRecord, ProfilePortError> {
+    let payload = client
+        .http
+        .get(format!(
+            "{}/api/resource/Customer/{}",
+            client.base_url,
+            urlencoding::encode(id.trim())
+        ))
+        .header(reqwest::header::AUTHORIZATION, client.auth_header())
+        .send()
+        .await
+        .map_err(|_| ProfilePortError::LookupFailed)?
+        .error_for_status()
+        .map_err(|_| ProfilePortError::LookupFailed)?
+        .json::<CustomerGetResponse>()
+        .await
+        .map_err(|_| ProfilePortError::LookupFailed)?;
+
+    Ok(CustomerProfileRecord {
+        phone: if payload.data.mobile_no.trim().is_empty() {
+            extract_phone_from_details(&payload.data.customer_details)
+        } else {
+            payload.data.mobile_no.trim().to_string()
+        },
+    })
+}
+
 fn normalize_limit(limit: usize) -> usize {
     match limit {
         0 => 20,
@@ -69,6 +100,19 @@ struct CustomerListRow {
     name: String,
     #[serde(default)]
     customer_name: String,
+    #[serde(default)]
+    mobile_no: String,
+    #[serde(default)]
+    customer_details: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CustomerGetResponse {
+    data: CustomerGetRow,
+}
+
+#[derive(Debug, Deserialize)]
+struct CustomerGetRow {
     #[serde(default)]
     mobile_no: String,
     #[serde(default)]
