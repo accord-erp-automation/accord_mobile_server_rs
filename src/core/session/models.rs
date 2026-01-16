@@ -27,10 +27,15 @@ pub struct SessionRecord {
 }
 
 impl SessionRecord {
-    pub fn new(principal: Principal, now: OffsetDateTime, ttl_seconds: Option<u64>) -> Self {
+    pub fn new(
+        principal: Principal,
+        now: OffsetDateTime,
+        created_at: Option<OffsetDateTime>,
+        ttl_seconds: Option<u64>,
+    ) -> Self {
         Self {
             principal,
-            created_at: Some(now),
+            created_at: Some(created_at.unwrap_or(now)),
             updated_at: Some(now),
             expires_at: ttl_seconds.map(|seconds| now + time::Duration::seconds(seconds as i64)),
         }

@@ -8,10 +8,7 @@ pub enum AppError {
     #[error("unauthorized")]
     Unauthorized,
     #[error("invalid config {key}={value}")]
-    InvalidConfig {
-        key: &'static str,
-        value: String,
-    },
+    InvalidConfig { key: &'static str, value: String },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -35,6 +32,12 @@ impl IntoResponse for AppError {
             AppError::TimeParse(_) => StatusCode::BAD_REQUEST,
         };
 
-        (status, Json(ErrorBody { error: "internal error" })).into_response()
+        (
+            status,
+            Json(ErrorBody {
+                error: "internal error",
+            }),
+        )
+            .into_response()
     }
 }

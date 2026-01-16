@@ -55,7 +55,7 @@ impl SessionManager {
         state.load().await?;
 
         let now = time::OffsetDateTime::now_utc();
-        let record = SessionRecord::new(principal, now, state.ttl_seconds);
+        let record = SessionRecord::new(principal, now, None, state.ttl_seconds);
         state.sessions.insert(token.clone(), record);
         state.save().await?;
 
@@ -85,6 +85,23 @@ impl SessionManager {
         if state.load().await.is_ok() && state.sessions.remove(token).is_some() {
             let _ = state.save().await;
         }
+    }
+
+    pub async fn update(&self, token: &str, principal: Principal) {
+        let mut state = self.inner.lock().await;
+
+        if state.load().await.is_err() {
+            return;
+        }
+
+        let Some(existing) = state.sessions.get(token) else {
+            return;
+        };
+
+        let now = time::OffsetDateTime::now_utc();
+        let record = SessionRecord::new(principal, now, existing.created_at, state.ttl_seconds);
+        state.sessions.insert(token.to_string(), record);
+        let _ = state.save().await;
     }
 }
 
@@ -126,10 +143,44 @@ fn generate_token() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_token;
+    use super::{SessionManager, generate_token};
+    use crate::core::auth::models::{Principal, PrincipalRole};
 
     #[test]
     fn token_matches_go_length() {
         assert_eq!(generate_token().len(), 32);
+    }
+
+    #[tokio::test]
+    async fn update_replaces_principal() {
+        let sessions = SessionManager::memory(Some(60));
+        let token = sessions
+            .create(Principal {
+                role: PrincipalRole::Admin,
+                display_name: "Admin".to_string(),
+                legal_name: "Admin".to_string(),
+                ref_: "admin".to_string(),
+                phone: "+998880000000".to_string(),
+                avatar_url: String::new(),
+            })
+            .await
+            .expect("create session");
+
+        sessions
+            .update(
+                &token,
+                Principal {
+                    role: PrincipalRole::Admin,
+                    display_name: "Alias".to_string(),
+                    legal_name: "Admin".to_string(),
+                    ref_: "admin".to_string(),
+                    phone: "+998880000000".to_string(),
+                    avatar_url: String::new(),
+                },
+            )
+            .await;
+
+        let principal = sessions.get(&token).await.expect("get session");
+        assert_eq!(principal.display_name, "Alias");
     }
 }
