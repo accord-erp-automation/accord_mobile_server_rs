@@ -472,4 +472,12 @@ impl WerkaHomeLookup for FakeWerkaHomeLookup {
     ) -> Result<Vec<WerkaStatusBreakdownEntry>, WerkaPortError> {
         Ok(Vec::new())
     }
+
+    async fn werka_status_details(
+        &self,
+        _kind: &str,
+        _supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        Ok(Vec::new())
+    }
 }

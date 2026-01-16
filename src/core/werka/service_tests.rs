@@ -48,6 +48,16 @@ async fn status_breakdown_returns_none_without_lookup() {
 }
 
 #[tokio::test]
+async fn status_details_returns_none_without_lookup() {
+    let data = WerkaService::new()
+        .status_details("pending", "SUP-001")
+        .await
+        .expect("status details result");
+
+    assert!(data.is_none());
+}
+
+#[tokio::test]
 async fn home_preloads_from_lookup_with_limit() {
     let data = WerkaService::new()
         .with_lookup(Arc::new(FakeWerkaHomeLookup))
@@ -111,6 +121,19 @@ async fn status_breakdown_uses_lookup_with_kind() {
 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].supplier_ref, "SUP-001");
+}
+
+#[tokio::test]
+async fn status_details_uses_lookup_with_kind_and_supplier() {
+    let items = WerkaService::new()
+        .with_lookup(Arc::new(FakeWerkaHomeLookup))
+        .status_details("pending", "SUP-001")
+        .await
+        .expect("status details result")
+        .expect("status details data");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "PR-001");
 }
 
 struct FakeWerkaHomeLookup;
@@ -193,6 +216,28 @@ impl WerkaHomeLookup for FakeWerkaHomeLookup {
             total_accepted_qty: 8.0,
             total_returned_qty: 2.0,
             uom: "Kg".to_string(),
+        }])
+    }
+
+    async fn werka_status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        assert_eq!(kind, "pending");
+        assert_eq!(supplier_ref, "SUP-001");
+        Ok(vec![DispatchRecord {
+            id: "PR-001".to_string(),
+            supplier_ref: "SUP-001".to_string(),
+            supplier_name: "Supplier".to_string(),
+            item_code: "ITEM-001".to_string(),
+            item_name: "Item".to_string(),
+            uom: "Kg".to_string(),
+            sent_qty: 10.0,
+            accepted_qty: 0.0,
+            status: "pending".to_string(),
+            created_label: "2026-01-16T10:00:00Z".to_string(),
+            ..DispatchRecord::default()
         }])
     }
 }

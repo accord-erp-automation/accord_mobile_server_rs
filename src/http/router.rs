@@ -20,6 +20,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/mobile/werka/status-breakdown",
             any(werka::status_breakdown),
         )
+        .route(
+            "/v1/mobile/werka/status-details",
+            any(werka::status_details),
+        )
         .route("/v1/mobile/werka/summary", any(werka::summary))
         .route("/v1/mobile/werka/home", any(werka::home))
         .layer(TraceLayer::new_for_http())

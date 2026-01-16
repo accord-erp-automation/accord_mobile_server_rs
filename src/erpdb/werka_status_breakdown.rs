@@ -60,7 +60,7 @@ fn add_if_matches(
     }
 }
 
-fn matches_werka_breakdown(record: &DispatchRecord, kind: &str) -> bool {
+pub(crate) fn matches_werka_breakdown(record: &DispatchRecord, kind: &str) -> bool {
     match kind.trim() {
         "pending" => record.status == "pending" || record.status == "draft",
         "confirmed" => record.status == "accepted",

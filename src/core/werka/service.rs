@@ -69,4 +69,19 @@ impl WerkaService {
 
         lookup.werka_status_breakdown(kind).await.map(Some)
     }
+
+    pub async fn status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Option<Vec<DispatchRecord>>, WerkaPortError> {
+        let Some(lookup) = &self.lookup else {
+            return Ok(None);
+        };
+
+        lookup
+            .werka_status_details(kind, supplier_ref)
+            .await
+            .map(Some)
+    }
 }

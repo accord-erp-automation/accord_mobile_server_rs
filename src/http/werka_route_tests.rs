@@ -209,6 +209,90 @@ async fn werka_status_breakdown_accepts_post_like_go_handler() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn werka_status_details_requires_auth() {
+    let app = build_router(test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/status-details?kind=pending&supplier_ref=SUP-001")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn werka_status_details_fails_without_provider_like_go() {
+    let state = test_state();
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/status-details?kind=pending&supplier_ref=SUP-001")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn werka_status_details_returns_provider_payload() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v1/mobile/werka/status-details?kind=%20pending%20&supplier_ref=%20SUP-001%20",
+                )
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value[0]["id"], "PR-001");
+    assert_eq!(value[0]["supplier_ref"], "SUP-001");
+}
+
+#[tokio::test]
+async fn werka_status_details_accepts_post_like_go_handler() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/werka/status-details?kind=pending&supplier_ref=SUP-001")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn werka_session(state: &AppState) -> String {
     state
         .sessions
@@ -269,6 +353,28 @@ impl WerkaHomeLookup for FakeWerkaLookup {
             total_accepted_qty: 8.0,
             total_returned_qty: 2.0,
             uom: "Kg".to_string(),
+        }])
+    }
+
+    async fn werka_status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        assert_eq!(kind, "pending");
+        assert_eq!(supplier_ref, "SUP-001");
+        Ok(vec![DispatchRecord {
+            id: "PR-001".to_string(),
+            supplier_ref: "SUP-001".to_string(),
+            supplier_name: "Supplier".to_string(),
+            item_code: "ITEM-001".to_string(),
+            item_name: "Item".to_string(),
+            uom: "Kg".to_string(),
+            sent_qty: 10.0,
+            accepted_qty: 0.0,
+            status: "pending".to_string(),
+            created_label: "2026-01-16".to_string(),
+            ..DispatchRecord::default()
         }])
     }
 }

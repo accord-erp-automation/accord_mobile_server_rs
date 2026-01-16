@@ -13,6 +13,7 @@ use crate::erpdb::werka_home::{
 };
 use crate::erpdb::werka_pending::build_werka_pending;
 use crate::erpdb::werka_status_breakdown::build_werka_status_breakdown;
+use crate::erpdb::werka_status_details::build_werka_status_details;
 use crate::erpdb::werka_summary::{
     DeliveryNoteStatusRow, PurchaseReceiptStatusRow, build_werka_summary,
 };
@@ -128,6 +129,26 @@ impl DirectDbReader {
             kind,
         ))
     }
+
+    async fn status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, sqlx::Error> {
+        let receipts = query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+        let delivery_notes = query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(build_werka_status_details(
+            &receipts,
+            &delivery_notes,
+            kind,
+            supplier_ref,
+        ))
+    }
 }
 
 #[async_trait]
@@ -161,6 +182,16 @@ impl WerkaHomeLookup for DirectDbReader {
         kind: &str,
     ) -> Result<Vec<WerkaStatusBreakdownEntry>, WerkaPortError> {
         self.status_breakdown(kind)
+            .await
+            .map_err(|error| WerkaPortError::Database(error.to_string()))
+    }
+
+    async fn werka_status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        self.status_details(kind, supplier_ref)
             .await
             .map_err(|error| WerkaPortError::Database(error.to_string()))
     }

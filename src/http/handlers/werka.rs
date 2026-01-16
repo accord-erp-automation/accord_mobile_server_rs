@@ -15,6 +15,12 @@ pub struct StatusBreakdownQuery {
     kind: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct StatusDetailsQuery {
+    kind: Option<String>,
+    supplier_ref: Option<String>,
+}
+
 pub async fn status_breakdown(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -30,6 +36,27 @@ pub async fn status_breakdown(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: "werka status breakdown failed",
+            }),
+        )),
+    }
+}
+
+pub async fn status_details(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<StatusDetailsQuery>,
+) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    let principal = authorize(&state, &headers).await?;
+    require_werka(&principal)?;
+
+    let kind = query.kind.as_deref().unwrap_or("").trim();
+    let supplier_ref = query.supplier_ref.as_deref().unwrap_or("").trim();
+    match state.werka.status_details(kind, supplier_ref).await {
+        Ok(Some(items)) => Ok(Json(items)),
+        Ok(None) | Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "werka status details failed",
             }),
         )),
     }

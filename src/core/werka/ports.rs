@@ -14,6 +14,11 @@ pub trait WerkaHomeLookup: Send + Sync {
         &self,
         kind: &str,
     ) -> Result<Vec<WerkaStatusBreakdownEntry>, WerkaPortError>;
+    async fn werka_status_details(
+        &self,
+        kind: &str,
+        supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError>;
 }
 
 #[derive(Debug, thiserror::Error)]
