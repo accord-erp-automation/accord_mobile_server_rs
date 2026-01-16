@@ -1,7 +1,13 @@
-use crate::config::AppConfig;
-use crate::core::auth::models::{Principal, PrincipalRole};
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+use crate::config::AppConfig;
+use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
+use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::auth::ports::{
+    AdminAccessState, AdminAccessStateLookup, SupplierLookup, SupplierRecord,
+};
+
+#[derive(Clone)]
 pub struct AuthService {
     supplier_prefix: String,
     werka_prefix: String,
@@ -10,6 +16,8 @@ pub struct AuthService {
     admin_phone: String,
     admin_name: String,
     admin_code: String,
+    supplier_lookup: Option<Arc<dyn SupplierLookup>>,
+    admin_state_lookup: Option<Arc<dyn AdminAccessStateLookup>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -18,6 +26,8 @@ pub enum AuthError {
     InvalidCredentials,
     #[error("invalid role")]
     InvalidRole,
+    #[error("internal auth error")]
+    Internal,
 }
 
 impl AuthService {
@@ -31,7 +41,19 @@ impl AuthService {
                 .unwrap_or_else(|_| config.admin_phone.trim().to_string()),
             admin_name: blank_default(&config.admin_name, "Admin"),
             admin_code: config.admin_code.trim().to_string(),
+            supplier_lookup: None,
+            admin_state_lookup: None,
         }
+    }
+
+    pub fn with_supplier_dependencies(
+        mut self,
+        supplier_lookup: Arc<dyn SupplierLookup>,
+        admin_state_lookup: Arc<dyn AdminAccessStateLookup>,
+    ) -> Self {
+        self.supplier_lookup = Some(supplier_lookup);
+        self.admin_state_lookup = Some(admin_state_lookup);
+        self
     }
 
     pub async fn login(&self, phone: &str, code: &str) -> Result<Principal, AuthError> {
@@ -54,10 +76,65 @@ impl AuthService {
         }
 
         match self.infer_role(code)? {
+            PrincipalRole::Supplier => self.login_supplier(&normalized_phone, code).await,
             PrincipalRole::Werka => self.login_werka(normalized_phone, code),
-            PrincipalRole::Supplier | PrincipalRole::Customer => Err(AuthError::InvalidCredentials),
+            PrincipalRole::Customer => Err(AuthError::InvalidCredentials),
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
+    }
+
+    async fn login_supplier(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+    ) -> Result<Principal, AuthError> {
+        let supplier_lookup = self
+            .supplier_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?;
+        let admin_state_lookup = self
+            .admin_state_lookup
+            .as_ref()
+            .ok_or(AuthError::InvalidCredentials)?;
+
+        let mut suppliers = supplier_lookup
+            .search_suppliers(normalized_phone, 50)
+            .await
+            .map_err(|_| AuthError::Internal)?;
+        if suppliers.is_empty() {
+            suppliers = supplier_lookup
+                .search_suppliers("", 500)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
+
+        let states = admin_state_lookup
+            .list_states()
+            .await
+            .map_err(|_| AuthError::Internal)?;
+
+        for supplier in suppliers {
+            let state = states.get(supplier.id.trim()).cloned().unwrap_or_default();
+            if state.removed || state.blocked {
+                continue;
+            }
+
+            let code_value = supplier_access_code_for(&supplier, &state)?;
+            if code.trim() == code_value
+                && supplier.phone.trim().eq_ignore_ascii_case(normalized_phone)
+            {
+                return Ok(Principal {
+                    role: PrincipalRole::Supplier,
+                    display_name: supplier.name.clone(),
+                    legal_name: supplier.name,
+                    ref_: supplier.id,
+                    phone: supplier.phone,
+                    avatar_url: String::new(),
+                });
+            }
+        }
+
+        Err(AuthError::InvalidCredentials)
     }
 
     fn login_werka(&self, normalized_phone: String, code: &str) -> Result<Principal, AuthError> {
@@ -137,11 +214,33 @@ fn blank_default(value: &str, fallback: &str) -> String {
     }
 }
 
+fn supplier_access_code_for(
+    supplier: &SupplierRecord,
+    state: &AdminAccessState,
+) -> Result<String, AuthError> {
+    let custom = state.custom_code.trim();
+    if !custom.is_empty() {
+        return Ok(custom.to_string());
+    }
+
+    supplier_access_code(&SupplierAccessInput {
+        ref_: supplier.id.clone(),
+        name: supplier.name.clone(),
+        phone: supplier.phone.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AuthService, normalize_phone};
     use crate::config::AppConfig;
     use crate::core::auth::models::PrincipalRole;
+    use crate::core::auth::ports::{
+        AdminAccessState, AdminAccessStateLookup, AuthPortError, SupplierLookup, SupplierRecord,
+    };
+    use async_trait::async_trait;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     fn config() -> AppConfig {
         AppConfig {
@@ -187,5 +286,99 @@ mod tests {
 
         assert_eq!(principal.role, PrincipalRole::Werka);
         assert_eq!(principal.ref_, "werka");
+    }
+
+    #[tokio::test]
+    async fn supplier_login_uses_deterministic_code() {
+        let suppliers = Arc::new(FakeSupplierLookup {
+            suppliers: vec![SupplierRecord {
+                id: "SUP-001".to_string(),
+                name: "Abdulloh".to_string(),
+                phone: "+998901234567".to_string(),
+            }],
+        });
+        let states = Arc::new(FakeStateLookup::default());
+        let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
+
+        let principal = auth
+            .login("+998901234567", "104LJINSVVO5")
+            .await
+            .expect("supplier login");
+
+        assert_eq!(principal.role, PrincipalRole::Supplier);
+        assert_eq!(principal.ref_, "SUP-001");
+    }
+
+    #[tokio::test]
+    async fn supplier_login_respects_custom_code_and_blocked_state() {
+        let suppliers = Arc::new(FakeSupplierLookup {
+            suppliers: vec![
+                SupplierRecord {
+                    id: "SUP-BLOCKED".to_string(),
+                    name: "Blocked".to_string(),
+                    phone: "+998901234567".to_string(),
+                },
+                SupplierRecord {
+                    id: "SUP-OK".to_string(),
+                    name: "Open".to_string(),
+                    phone: "+998901234567".to_string(),
+                },
+            ],
+        });
+        let states = Arc::new(FakeStateLookup {
+            states: BTreeMap::from([
+                (
+                    "SUP-BLOCKED".to_string(),
+                    AdminAccessState {
+                        custom_code: "10CUSTOM".to_string(),
+                        blocked: true,
+                        removed: false,
+                    },
+                ),
+                (
+                    "SUP-OK".to_string(),
+                    AdminAccessState {
+                        custom_code: "10CUSTOM".to_string(),
+                        blocked: false,
+                        removed: false,
+                    },
+                ),
+            ]),
+        });
+        let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
+
+        let principal = auth
+            .login("+998901234567", "10CUSTOM")
+            .await
+            .expect("supplier login");
+
+        assert_eq!(principal.ref_, "SUP-OK");
+    }
+
+    struct FakeSupplierLookup {
+        suppliers: Vec<SupplierRecord>,
+    }
+
+    #[async_trait]
+    impl SupplierLookup for FakeSupplierLookup {
+        async fn search_suppliers(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SupplierRecord>, AuthPortError> {
+            Ok(self.suppliers.clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeStateLookup {
+        states: BTreeMap<String, AdminAccessState>,
+    }
+
+    #[async_trait]
+    impl AdminAccessStateLookup for FakeStateLookup {
+        async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError> {
+            Ok(self.states.clone())
+        }
     }
 }

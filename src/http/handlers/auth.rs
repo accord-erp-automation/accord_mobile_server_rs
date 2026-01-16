@@ -92,6 +92,12 @@ fn login_error(error: AuthError) -> (StatusCode, Json<ErrorResponse>) {
                 error: "invalid credentials",
             }),
         ),
+        AuthError::Internal => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "internal error",
+            }),
+        ),
     }
 }
 
