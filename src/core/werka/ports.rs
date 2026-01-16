@@ -12,4 +12,6 @@ pub trait WerkaHomeLookup: Send + Sync {
 pub enum WerkaPortError {
     #[error("lookup failed")]
     LookupFailed,
+    #[error("database lookup failed: {0}")]
+    Database(String),
 }
