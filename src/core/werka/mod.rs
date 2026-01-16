@@ -1,3 +1,4 @@
+mod confirm;
 #[cfg(test)]
 mod customer_issue_tests;
 mod lookup_service;

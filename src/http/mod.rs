@@ -15,6 +15,8 @@ mod supplier_unannounced_route_tests;
 #[cfg(test)]
 mod werka_archive_route_tests;
 #[cfg(test)]
+mod werka_confirm_route_tests;
+#[cfg(test)]
 mod werka_customer_issue_route_tests;
 #[cfg(test)]
 mod werka_directory_route_tests;

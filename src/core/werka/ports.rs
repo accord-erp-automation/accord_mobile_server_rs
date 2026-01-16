@@ -293,6 +293,18 @@ pub trait SupplierUnannouncedWriter: Send + Sync {
 }
 
 #[async_trait]
+pub trait WerkaConfirmWriter: Send + Sync {
+    async fn confirm_and_submit_purchase_receipt(
+        &self,
+        name: &str,
+        accepted_qty: f64,
+        returned_qty: f64,
+        return_reason: &str,
+        return_comment: &str,
+    ) -> Result<PurchaseReceiptSubmissionResult, WerkaPortError>;
+}
+
+#[async_trait]
 pub trait NotificationDetailWriter: Send + Sync {
     async fn get_notification_purchase_receipt(
         &self,

@@ -1,5 +1,6 @@
 mod archive;
 mod authz;
+mod confirm;
 mod customer_issue;
 mod directory;
 mod items;
@@ -8,6 +9,7 @@ mod read;
 mod unannounced;
 
 pub use archive::{archive, archive_pdf};
+pub use confirm::confirm;
 pub use customer_issue::{customer_issue_batch_create, customer_issue_create};
 pub use directory::{customers, suppliers};
 pub use items::{customer_item_options, customer_items, supplier_items};

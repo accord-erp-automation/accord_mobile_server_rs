@@ -210,6 +210,16 @@ pub struct SupplierUnannouncedResponseRequest {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConfirmReceiptRequest {
+    pub receipt_id: String,
+    pub accepted_qty: f64,
+    pub returned_qty: f64,
+    pub return_reason: String,
+    pub return_comment: String,
+}
+
 fn is_zero(value: &f64) -> bool {
     *value == 0.0
 }

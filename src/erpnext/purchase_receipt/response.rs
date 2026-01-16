@@ -5,11 +5,15 @@ use serde_json::Value;
 
 use crate::core::werka::ports::{
     PurchaseReceiptComment, PurchaseReceiptDraft, PurchaseReceiptSubmissionResult,
-    SupplierUnannouncedWriter, WerkaPortError,
+    SupplierUnannouncedWriter, WerkaConfirmWriter, WerkaPortError,
 };
 use crate::erpnext::client::ErpnextClient;
 
 use super::{ListResponse, ResourceResponse, map_purchase_receipt};
+
+mod decision;
+
+use decision::{build_accord_decision_note, submission_result, upsert_accord_decision_in_remarks};
 
 #[async_trait]
 impl SupplierUnannouncedWriter for ErpnextClient {
@@ -41,42 +45,17 @@ impl SupplierUnannouncedWriter for ErpnextClient {
         name: &str,
         accepted_qty: f64,
         returned_qty: f64,
-        _return_reason: &str,
-        _return_comment: &str,
+        return_reason: &str,
+        return_comment: &str,
     ) -> Result<PurchaseReceiptSubmissionResult, WerkaPortError> {
-        if accepted_qty < 0.0 {
-            return Err(WerkaPortError::WriteFailed(
-                "accepted qty cannot be negative".to_string(),
-            ));
-        }
-        let mut doc = self.purchase_receipt_doc(name).await?;
-        let draft = map_purchase_receipt(doc.clone())?;
-        if accepted_qty > draft.qty {
-            return Err(WerkaPortError::WriteFailed(
-                "accepted qty cannot exceed sent qty".to_string(),
-            ));
-        }
-        update_first_receipt_item(&mut doc, accepted_qty, returned_qty)?;
-        self.request_empty(
-            Method::PUT,
-            &format!(
-                "/api/resource/Purchase Receipt/{}",
-                urlencoding::encode(name.trim())
-            ),
-            Some(doc),
-        )
-        .await?;
-        self.submit_doc("Purchase Receipt", name).await?;
-        Ok(PurchaseReceiptSubmissionResult {
-            name: name.trim().to_string(),
-            supplier: draft.supplier,
-            item_code: draft.item_code,
-            uom: draft.uom,
-            sent_qty: draft.qty,
+        self.confirm_purchase_receipt(
+            name,
             accepted_qty,
-            supplier_delivery_note: draft.supplier_delivery_note,
-            note: String::new(),
-        })
+            returned_qty,
+            return_reason,
+            return_comment,
+        )
+        .await
     }
 
     async fn add_purchase_receipt_comment(
@@ -142,7 +121,108 @@ impl SupplierUnannouncedWriter for ErpnextClient {
     }
 }
 
+#[async_trait]
+impl WerkaConfirmWriter for ErpnextClient {
+    async fn confirm_and_submit_purchase_receipt(
+        &self,
+        name: &str,
+        accepted_qty: f64,
+        returned_qty: f64,
+        return_reason: &str,
+        return_comment: &str,
+    ) -> Result<PurchaseReceiptSubmissionResult, WerkaPortError> {
+        self.confirm_purchase_receipt(
+            name,
+            accepted_qty,
+            returned_qty,
+            return_reason,
+            return_comment,
+        )
+        .await
+    }
+}
+
 impl ErpnextClient {
+    async fn confirm_purchase_receipt(
+        &self,
+        name: &str,
+        accepted_qty: f64,
+        returned_qty: f64,
+        return_reason: &str,
+        return_comment: &str,
+    ) -> Result<PurchaseReceiptSubmissionResult, WerkaPortError> {
+        if accepted_qty < 0.0 {
+            return Err(WerkaPortError::WriteFailed(
+                "accepted qty cannot be negative".to_string(),
+            ));
+        }
+        let mut doc = self.purchase_receipt_doc(name).await?;
+        let original_doc = doc.clone();
+        let draft = map_purchase_receipt(doc.clone())?;
+        if accepted_qty > draft.qty {
+            return Err(WerkaPortError::WriteFailed(
+                "accepted qty cannot exceed sent qty".to_string(),
+            ));
+        }
+
+        let decision_note = build_accord_decision_note(
+            &draft,
+            accepted_qty,
+            returned_qty,
+            return_reason,
+            return_comment,
+        )?;
+        let full_return = accepted_qty == 0.0 && returned_qty >= draft.qty && draft.qty > 0.0;
+        if full_return {
+            if !decision_note.trim().is_empty() {
+                let remarks = upsert_accord_decision_in_remarks(&draft.remarks, &decision_note);
+                self.update_purchase_receipt_remarks(name, &remarks).await?;
+                let _ = self
+                    .add_purchase_receipt_comment(name, &decision_note)
+                    .await;
+            }
+            return Ok(submission_result(&draft, accepted_qty, &decision_note));
+        }
+
+        update_first_receipt_item(self, &mut doc, accepted_qty, returned_qty).await?;
+        let existing_remarks = string_value(&doc, "remarks");
+        if !decision_note.trim().is_empty()
+            && let Some(object) = doc.as_object_mut()
+        {
+            object.insert(
+                "remarks".to_string(),
+                serde_json::json!(upsert_accord_decision_in_remarks(
+                    &existing_remarks,
+                    &decision_note,
+                )),
+            );
+        }
+
+        let path = format!(
+            "/api/resource/Purchase Receipt/{}",
+            urlencoding::encode(name.trim())
+        );
+        self.request_empty(Method::PUT, &path, Some(doc)).await?;
+        if let Err(error) = self.submit_doc("Purchase Receipt", name).await {
+            if let Err(rollback_error) = self
+                .request_empty(Method::PUT, &path, Some(original_doc))
+                .await
+            {
+                return Err(WerkaPortError::WriteFailed(format!(
+                    "submit failed: {}; rollback failed: {}",
+                    error, rollback_error
+                )));
+            }
+            return Err(error);
+        }
+        if !decision_note.trim().is_empty() {
+            let _ = self
+                .add_purchase_receipt_comment(name, &decision_note)
+                .await;
+        }
+        Ok(submission_result(&draft, accepted_qty, &decision_note))
+    }
+
     async fn purchase_receipt_doc(&self, name: &str) -> Result<Value, WerkaPortError> {
         let payload: ResourceResponse<Value> = self
             .request_json(
@@ -189,9 +269,45 @@ impl ErpnextClient {
         }
         Ok(())
     }
+
+    async fn find_alternate_warehouse(
+        &self,
+        accepted_warehouse: &str,
+    ) -> Result<String, WerkaPortError> {
+        let payload: ListResponse<WarehouseRow> = self
+            .purchase_get_json(
+                "/api/resource/Warehouse",
+                &[
+                    ("fields", r#"["name","is_group"]"#.to_string()),
+                    ("limit_page_length", "50".to_string()),
+                ],
+            )
+            .await?;
+        payload
+            .data
+            .into_iter()
+            .find_map(|row| {
+                let name = row.name.trim();
+                if row.is_group != 0
+                    || name.is_empty()
+                    || name.eq_ignore_ascii_case(accepted_warehouse.trim())
+                {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .ok_or_else(|| {
+                WerkaPortError::WriteFailed(format!(
+                    "rejected warehouse topilmadi: {}",
+                    accepted_warehouse.trim()
+                ))
+            })
+    }
 }
 
-fn update_first_receipt_item(
+async fn update_first_receipt_item(
+    client: &ErpnextClient,
     doc: &mut Value,
     accepted_qty: f64,
     returned_qty: f64,
@@ -219,7 +335,19 @@ fn update_first_receipt_item(
         serde_json::json!(received_qty * conversion_factor),
     );
     first_item.insert("rejected_qty".to_string(), serde_json::json!(returned_qty));
-    if returned_qty <= 0.0 {
+    if returned_qty > 0.0 {
+        let mut rejected_warehouse = object_string(first_item, "rejected_warehouse");
+        let accepted_warehouse = object_string(first_item, "warehouse");
+        if rejected_warehouse.is_empty()
+            || rejected_warehouse.eq_ignore_ascii_case(accepted_warehouse.trim())
+        {
+            rejected_warehouse = client.find_alternate_warehouse(&accepted_warehouse).await?;
+        }
+        first_item.insert(
+            "rejected_warehouse".to_string(),
+            serde_json::json!(rejected_warehouse),
+        );
+    } else {
         first_item.insert("rejected_warehouse".to_string(), serde_json::json!(""));
     }
     first_item.insert(
@@ -230,6 +358,30 @@ fn update_first_receipt_item(
         first_item.insert("rate".to_string(), serde_json::json!(0));
     }
     Ok(())
+}
+
+fn object_string(object: &serde_json::Map<String, Value>, key: &str) -> String {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn string_value(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct WarehouseRow {
+    name: String,
+    is_group: i32,
 }
 
 #[derive(Debug, Deserialize)]

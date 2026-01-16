@@ -28,6 +28,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/mobile/werka/archive", any(werka::archive))
         .route("/v1/mobile/werka/archive/pdf", any(werka::archive_pdf))
+        .route("/v1/mobile/werka/confirm", any(werka::confirm))
         .route(
             "/v1/mobile/werka/customer-issue/create",
             any(werka::customer_issue_create),
