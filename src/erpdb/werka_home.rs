@@ -98,24 +98,40 @@ pub(crate) fn build_werka_home(
 }
 
 fn classify_werka_receipt(row: &PurchaseReceiptSummaryRow) -> (String, bool) {
-    let mut sent_qty = row.total_qty;
-    if let Some(marker_qty) = parse_telegram_receipt_marker_qty(&row.supplier_delivery_note)
+    classify_werka_receipt_fields(
+        row.doc_status,
+        &row.status,
+        row.total_qty,
+        &row.supplier_delivery_note,
+        &row.remarks,
+    )
+}
+
+pub(crate) fn classify_werka_receipt_fields(
+    doc_status: i32,
+    raw_status: &str,
+    total_qty: f64,
+    supplier_delivery_note: &str,
+    remarks: &str,
+) -> (String, bool) {
+    let mut sent_qty = total_qty;
+    if let Some(marker_qty) = parse_telegram_receipt_marker_qty(supplier_delivery_note)
         && marker_qty > sent_qty
     {
         sent_qty = marker_qty;
     }
 
     let mut status = "pending";
-    if row.doc_status == 2 || row.status.trim().eq_ignore_ascii_case("Cancelled") {
+    if doc_status == 2 || raw_status.trim().eq_ignore_ascii_case("Cancelled") {
         status = "cancelled";
-    } else if row.doc_status == 1 {
-        status = purchase_receipt_status_from_quantities(sent_qty, row.total_qty);
-    } else if row.status.trim().eq_ignore_ascii_case("Draft") {
+    } else if doc_status == 1 {
+        status = purchase_receipt_status_from_quantities(sent_qty, total_qty);
+    } else if raw_status.trim().eq_ignore_ascii_case("Draft") {
         status = "draft";
     }
 
-    let unannounced_state = extract_werka_unannounced_state(&row.remarks);
-    if row.doc_status == 0 && unannounced_state == "pending" {
+    let unannounced_state = extract_werka_unannounced_state(remarks);
+    if doc_status == 0 && unannounced_state == "pending" {
         return (status.to_string(), false);
     }
     if status == "accepted" && unannounced_state == "approved" {
@@ -194,7 +210,7 @@ fn delivery_status(row: &DeliveryNoteSummaryRow) -> String {
     .to_string()
 }
 
-fn delivery_status_from_state(
+pub(crate) fn delivery_status_from_state(
     doc_status: i32,
     flow_state: i32,
     customer_state: i32,

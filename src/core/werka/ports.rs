@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 
-use crate::core::werka::models::WerkaHomeData;
+use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
 
 #[async_trait]
 pub trait WerkaHomeLookup: Send + Sync {
+    async fn werka_summary(&self) -> Result<WerkaHomeSummary, WerkaPortError>;
     async fn werka_home(&self, pending_limit: usize) -> Result<WerkaHomeData, WerkaPortError>;
 }
 

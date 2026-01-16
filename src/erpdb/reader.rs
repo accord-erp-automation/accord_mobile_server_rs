@@ -3,10 +3,13 @@ use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions};
 use sqlx::{MySqlPool, query_as};
 
 use crate::config::DirectDbConfig;
-use crate::core::werka::models::WerkaHomeData;
+use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::erpdb::werka_home::{
     DeliveryNoteSummaryRow, PurchaseReceiptSummaryRow, build_werka_home,
+};
+use crate::erpdb::werka_summary::{
+    DeliveryNoteStatusRow, PurchaseReceiptStatusRow, build_werka_summary,
 };
 
 #[derive(Clone)]
@@ -39,10 +42,27 @@ impl DirectDbReader {
 
         Ok(build_werka_home(&receipts, &delivery_notes, pending_limit))
     }
+
+    async fn summary(&self) -> Result<WerkaHomeSummary, sqlx::Error> {
+        let receipts = query_as::<_, PurchaseReceiptStatusRow>(PURCHASE_RECEIPT_STATUS_ROWS_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+        let delivery_notes = query_as::<_, DeliveryNoteStatusRow>(DELIVERY_NOTE_STATUS_ROWS_SQL)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(build_werka_summary(&receipts, &delivery_notes))
+    }
 }
 
 #[async_trait]
 impl WerkaHomeLookup for DirectDbReader {
+    async fn werka_summary(&self) -> Result<WerkaHomeSummary, WerkaPortError> {
+        self.summary()
+            .await
+            .map_err(|error| WerkaPortError::Database(error.to_string()))
+    }
+
     async fn werka_home(&self, pending_limit: usize) -> Result<WerkaHomeData, WerkaPortError> {
         self.home(pending_limit)
             .await
@@ -90,4 +110,23 @@ const DELIVERY_NOTE_ROWS_SQL: &str = r#"
     FROM `tabDelivery Note` dn
     LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name AND dni.idx = 1
     ORDER BY dn.name DESC
+"#;
+
+const PURCHASE_RECEIPT_STATUS_ROWS_SQL: &str = r#"
+    SELECT
+        pr.docstatus AS doc_status,
+        COALESCE(pr.status, '') AS status,
+        COALESCE(pr.total_qty, 0) AS total_qty,
+        COALESCE(pr.supplier_delivery_note, '') AS supplier_delivery_note,
+        COALESCE(pr.remarks, '') AS remarks
+    FROM `tabPurchase Receipt` pr
+    WHERE pr.supplier_delivery_note LIKE 'TG:%'
+"#;
+
+const DELIVERY_NOTE_STATUS_ROWS_SQL: &str = r#"
+    SELECT
+        dn.docstatus AS doc_status,
+        COALESCE(dn.accord_flow_state, 0) AS accord_flow_state,
+        COALESCE(dn.accord_customer_state, 0) AS accord_customer_state
+    FROM `tabDelivery Note` dn
 "#;

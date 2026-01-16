@@ -14,6 +14,13 @@ async fn home_returns_none_without_lookup() {
 }
 
 #[tokio::test]
+async fn summary_returns_none_without_lookup() {
+    let data = WerkaService::new().summary().await.expect("summary result");
+
+    assert!(data.is_none());
+}
+
+#[tokio::test]
 async fn home_preloads_from_lookup_with_limit() {
     let data = WerkaService::new()
         .with_lookup(Arc::new(FakeWerkaHomeLookup))
@@ -26,10 +33,32 @@ async fn home_preloads_from_lookup_with_limit() {
     assert_eq!(data.pending_items[0].id, "PR-001");
 }
 
+#[tokio::test]
+async fn summary_uses_lookup() {
+    let summary = WerkaService::new()
+        .with_lookup(Arc::new(FakeWerkaHomeLookup))
+        .summary()
+        .await
+        .expect("summary result")
+        .expect("summary data");
+
+    assert_eq!(summary.pending_count, 1);
+    assert_eq!(summary.confirmed_count, 2);
+    assert_eq!(summary.returned_count, 3);
+}
+
 struct FakeWerkaHomeLookup;
 
 #[async_trait]
 impl WerkaHomeLookup for FakeWerkaHomeLookup {
+    async fn werka_summary(&self) -> Result<WerkaHomeSummary, WerkaPortError> {
+        Ok(WerkaHomeSummary {
+            pending_count: 1,
+            confirmed_count: 2,
+            returned_count: 3,
+        })
+    }
+
     async fn werka_home(&self, pending_limit: usize) -> Result<WerkaHomeData, WerkaPortError> {
         assert_eq!(pending_limit, 20);
         Ok(WerkaHomeData {
