@@ -5,7 +5,7 @@ use time::Date;
 
 use crate::config::DirectDbConfig;
 use crate::core::werka::models::{
-    DispatchRecord, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
     WerkaStatusBreakdownEntry,
 };
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
@@ -20,6 +20,7 @@ use crate::erpdb::werka_status_details::build_werka_status_details;
 use crate::erpdb::werka_summary::{
     DeliveryNoteStatusRow, PurchaseReceiptStatusRow, build_werka_summary,
 };
+use crate::erpdb::werka_suppliers::read_werka_suppliers;
 
 #[derive(Clone)]
 pub struct DirectDbReader {
@@ -162,6 +163,15 @@ impl DirectDbReader {
     ) -> Result<WerkaArchiveResponse, sqlx::Error> {
         read_werka_archive(&self.pool, kind, period, from, to).await
     }
+
+    async fn suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, sqlx::Error> {
+        read_werka_suppliers(&self.pool, query, limit, offset).await
+    }
 }
 
 #[async_trait]
@@ -217,6 +227,17 @@ impl WerkaHomeLookup for DirectDbReader {
         to: Option<Date>,
     ) -> Result<WerkaArchiveResponse, WerkaPortError> {
         self.archive(kind, period, from, to)
+            .await
+            .map_err(|error| WerkaPortError::Database(error.to_string()))
+    }
+
+    async fn werka_suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError> {
+        self.suppliers(query, limit, offset)
             .await
             .map_err(|error| WerkaPortError::Database(error.to_string()))
     }

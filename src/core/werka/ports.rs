@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use time::Date;
 
 use crate::core::werka::models::{
-    DispatchRecord, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
     WerkaStatusBreakdownEntry,
 };
 
@@ -28,6 +28,12 @@ pub trait WerkaHomeLookup: Send + Sync {
         from: Option<Date>,
         to: Option<Date>,
     ) -> Result<WerkaArchiveResponse, WerkaPortError>;
+    async fn werka_suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError>;
 }
 
 #[derive(Debug, thiserror::Error)]

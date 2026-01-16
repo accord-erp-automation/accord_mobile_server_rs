@@ -75,6 +75,14 @@ pub struct WerkaArchiveResponse {
     pub items: Vec<DispatchRecord>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierDirectoryEntry {
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub name: String,
+    pub phone: String,
+}
+
 fn is_zero(value: &f64) -> bool {
     *value == 0.0
 }

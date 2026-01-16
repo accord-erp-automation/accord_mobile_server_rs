@@ -11,7 +11,7 @@ use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{
-    DispatchRecord, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
     WerkaStatusBreakdownEntry,
 };
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
@@ -490,5 +490,14 @@ impl WerkaHomeLookup for FakeWerkaHomeLookup {
         _to: Option<time::Date>,
     ) -> Result<WerkaArchiveResponse, WerkaPortError> {
         Ok(WerkaArchiveResponse::default())
+    }
+
+    async fn werka_suppliers(
+        &self,
+        _: &str,
+        _: usize,
+        _: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError> {
+        Ok(Vec::new())
     }
 }

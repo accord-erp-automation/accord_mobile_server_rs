@@ -33,6 +33,38 @@ pub struct ArchiveQuery {
     to: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DirectoryQuery {
+    q: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
+}
+
+pub async fn suppliers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<DirectoryQuery>,
+) -> Result<
+    Json<Vec<crate::core::werka::models::SupplierDirectoryEntry>>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    let principal = authorize(&state, &headers).await?;
+    require_werka(&principal)?;
+
+    let q = query.q.as_deref().unwrap_or("").trim();
+    let limit = optional_search_limit(query.limit.as_deref(), 200, 200);
+    let offset = optional_search_offset(query.offset.as_deref());
+    match state.werka.suppliers(q, limit, offset).await {
+        Ok(Some(items)) => Ok(Json(items)),
+        Ok(None) | Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "werka suppliers failed",
+            }),
+        )),
+    }
+}
+
 pub async fn status_breakdown(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -265,4 +297,27 @@ fn archive_pdf_failed() -> (StatusCode, Json<ErrorResponse>) {
             error: "werka archive pdf failed",
         }),
     )
+}
+
+fn optional_search_limit(raw: Option<&str>, default_limit: usize, max_limit: usize) -> usize {
+    let Some(trimmed) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return default_limit;
+    };
+    let Ok(value) = trimmed.parse::<usize>() else {
+        return default_limit;
+    };
+    if value == 0 {
+        return default_limit;
+    }
+    if max_limit > 0 && value > max_limit {
+        return max_limit;
+    }
+    value
+}
+
+fn optional_search_offset(raw: Option<&str>) -> usize {
+    let Some(trimmed) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return 0;
+    };
+    trimmed.parse::<usize>().unwrap_or(0)
 }

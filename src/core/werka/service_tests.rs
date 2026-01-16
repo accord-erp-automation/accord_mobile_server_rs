@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use time::Date;
 
 use super::models::{
-    DispatchRecord, WerkaArchiveResponse, WerkaArchiveSummary, WerkaHomeData, WerkaHomeSummary,
-    WerkaStatusBreakdownEntry,
+    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaArchiveSummary,
+    WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
 };
 use super::ports::{WerkaHomeLookup, WerkaPortError};
 use super::service::WerkaService;
@@ -68,6 +68,16 @@ async fn archive_returns_none_without_lookup() {
         .archive("sent", "yearly", None, None)
         .await
         .expect("archive result");
+
+    assert!(data.is_none());
+}
+
+#[tokio::test]
+async fn suppliers_returns_none_without_lookup() {
+    let data = WerkaService::new()
+        .suppliers("Ali", 20, 3)
+        .await
+        .expect("suppliers result");
 
     assert!(data.is_none());
 }
@@ -163,6 +173,19 @@ async fn archive_uses_lookup_with_filters() {
     assert_eq!(items.kind, "sent");
     assert_eq!(items.period, "monthly");
     assert_eq!(items.summary.record_count, 1);
+}
+
+#[tokio::test]
+async fn suppliers_uses_lookup_with_pagination() {
+    let items = WerkaService::new()
+        .with_lookup(Arc::new(FakeWerkaHomeLookup))
+        .suppliers("Ali", 20, 3)
+        .await
+        .expect("suppliers result")
+        .expect("suppliers data");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].ref_, "SUP-001");
 }
 
 struct FakeWerkaHomeLookup;
@@ -291,5 +314,21 @@ impl WerkaHomeLookup for FakeWerkaHomeLookup {
             items: Vec::new(),
             ..WerkaArchiveResponse::default()
         })
+    }
+
+    async fn werka_suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError> {
+        assert_eq!(query, "Ali");
+        assert_eq!(limit, 20);
+        assert_eq!(offset, 3);
+        Ok(vec![SupplierDirectoryEntry {
+            ref_: "SUP-001".to_string(),
+            name: "Ali".to_string(),
+            phone: "+998901111111".to_string(),
+        }])
     }
 }

@@ -12,8 +12,8 @@ use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{
-    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaArchiveSummary,
-    WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    DispatchRecord, SupplierDirectoryEntry, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    WerkaStatusBreakdownEntry,
 };
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
@@ -48,12 +48,12 @@ fn test_state() -> AppState {
 }
 
 #[tokio::test]
-async fn werka_archive_requires_auth() {
+async fn werka_suppliers_requires_auth() {
     let app = build_router(test_state());
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/mobile/werka/archive?kind=sent&period=monthly")
+                .uri("/v1/mobile/werka/suppliers")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -64,14 +64,14 @@ async fn werka_archive_requires_auth() {
 }
 
 #[tokio::test]
-async fn werka_archive_fails_without_provider_like_go() {
+async fn werka_suppliers_fails_without_provider_like_go() {
     let state = test_state();
     let token = werka_session(&state).await;
     let app = build_router(state);
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/mobile/werka/archive?kind=sent&period=monthly")
+                .uri("/v1/mobile/werka/suppliers")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .expect("request"),
@@ -83,7 +83,7 @@ async fn werka_archive_fails_without_provider_like_go() {
 }
 
 #[tokio::test]
-async fn werka_archive_returns_provider_payload() {
+async fn werka_suppliers_returns_provider_payload_and_parses_query() {
     let mut state = test_state();
     state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
     let token = werka_session(&state).await;
@@ -91,7 +91,7 @@ async fn werka_archive_returns_provider_payload() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/mobile/werka/archive?kind=%20sent%20&period=%20monthly%20&from=2026-01-16&to=2026-01-20")
+                .uri("/v1/mobile/werka/suppliers?q=%20Ali%20&limit=999&offset=3")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .expect("request"),
@@ -104,44 +104,20 @@ async fn werka_archive_returns_provider_payload() {
         .await
         .expect("response body");
     let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-    assert_eq!(value["kind"], "sent");
-    assert_eq!(value["period"], "monthly");
-    assert_eq!(value["from"], "2026-01-16");
-    assert_eq!(value["to"], "2026-01-20");
-    assert_eq!(value["summary"]["record_count"], 1);
+    assert_eq!(value[0]["ref"], "SUP-001");
+    assert_eq!(value[0]["name"], "Ali");
 }
 
 #[tokio::test]
-async fn werka_archive_invalid_date_is_500_like_go() {
+async fn werka_suppliers_defaults_invalid_limit_and_offset_like_go() {
     let mut state = test_state();
-    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    state.werka = WerkaService::new().with_lookup(Arc::new(DefaultLimitLookup));
     let token = werka_session(&state).await;
     let app = build_router(state);
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/mobile/werka/archive?from=16-01-2026")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[tokio::test]
-async fn werka_archive_accepts_post_like_go_handler() {
-    let mut state = test_state();
-    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
-    let token = werka_session(&state).await;
-    let app = build_router(state);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/mobile/werka/archive?kind=sent&period=monthly")
+                .uri("/v1/mobile/werka/suppliers?limit=abc&offset=-9")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .expect("request"),
@@ -153,86 +129,7 @@ async fn werka_archive_accepts_post_like_go_handler() {
 }
 
 #[tokio::test]
-async fn werka_archive_pdf_requires_auth() {
-    let app = build_router(test_state());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn werka_archive_pdf_fails_without_provider_like_go() {
-    let state = test_state();
-    let token = werka_session(&state).await;
-    let app = build_router(state);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-    assert_eq!(value["error"], "werka archive pdf failed");
-}
-
-#[tokio::test]
-async fn werka_archive_pdf_returns_pdf_with_go_headers() {
-    let mut state = test_state();
-    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
-    let token = werka_session(&state).await;
-    let app = build_router(state);
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly&from=2026-01-16&to=2026-01-20")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .expect("content-type"),
-        "application/pdf"
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get(header::CONTENT_DISPOSITION)
-            .expect("content-disposition"),
-        "attachment; filename=\"werka-sent-monthly.pdf\""
-    );
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    assert!(bytes.starts_with(b"%PDF-1.4\n"));
-    assert!(bytes.ends_with(b"%%EOF\n"));
-}
-
-#[tokio::test]
-async fn werka_archive_pdf_accepts_post_like_go_handler() {
+async fn werka_suppliers_accepts_post_like_go_handler() {
     let mut state = test_state();
     state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
     let token = werka_session(&state).await;
@@ -241,7 +138,7 @@ async fn werka_archive_pdf_accepts_post_like_go_handler() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
+                .uri("/v1/mobile/werka/suppliers?q=Ali&limit=200&offset=3")
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .expect("request"),
@@ -268,6 +165,7 @@ async fn werka_session(state: &AppState) -> String {
 }
 
 struct FakeWerkaLookup;
+struct DefaultLimitLookup;
 
 #[async_trait]
 impl WerkaHomeLookup for FakeWerkaLookup {
@@ -304,44 +202,83 @@ impl WerkaHomeLookup for FakeWerkaLookup {
 
     async fn werka_archive(
         &self,
-        kind: &str,
-        period: &str,
-        from: Option<Date>,
-        to: Option<Date>,
+        _kind: &str,
+        _period: &str,
+        _from: Option<Date>,
+        _to: Option<Date>,
     ) -> Result<WerkaArchiveResponse, WerkaPortError> {
-        assert_eq!(kind, "sent");
-        assert_eq!(period, "monthly");
-        Ok(WerkaArchiveResponse {
-            kind: kind.to_string(),
-            period: period.to_string(),
-            from: from.map(|date| date.to_string()).unwrap_or_default(),
-            to: to.map(|date| date.to_string()).unwrap_or_default(),
-            summary: WerkaArchiveSummary {
-                record_count: 1,
-                totals_by_uom: Vec::new(),
-            },
-            items: vec![DispatchRecord {
-                id: "DN-001".to_string(),
-                record_type: "delivery_note".to_string(),
-                supplier_name: "Customer".to_string(),
-                item_code: "ITEM-001".to_string(),
-                item_name: "Item".to_string(),
-                uom: "Kg".to_string(),
-                sent_qty: 12.0,
-                accepted_qty: 10.0,
-                status: "partial".to_string(),
-                created_label: "2026-01-16".to_string(),
-                ..DispatchRecord::default()
-            }],
-        })
+        Ok(WerkaArchiveResponse::default())
     }
 
     async fn werka_suppliers(
         &self,
-        _query: &str,
-        _limit: usize,
-        _offset: usize,
+        query: &str,
+        limit: usize,
+        offset: usize,
     ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError> {
+        assert_eq!(query, "Ali");
+        assert_eq!(limit, 200);
+        assert_eq!(offset, 3);
+        Ok(vec![SupplierDirectoryEntry {
+            ref_: "SUP-001".to_string(),
+            name: "Ali".to_string(),
+            phone: "+998901111111".to_string(),
+        }])
+    }
+}
+
+#[async_trait]
+impl WerkaHomeLookup for DefaultLimitLookup {
+    async fn werka_summary(&self) -> Result<WerkaHomeSummary, WerkaPortError> {
+        Ok(WerkaHomeSummary::default())
+    }
+
+    async fn werka_home(&self, _pending_limit: usize) -> Result<WerkaHomeData, WerkaPortError> {
+        Ok(WerkaHomeData::default())
+    }
+
+    async fn werka_pending(&self, _limit: usize) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn werka_history(&self) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn werka_status_breakdown(
+        &self,
+        _kind: &str,
+    ) -> Result<Vec<WerkaStatusBreakdownEntry>, WerkaPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn werka_status_details(
+        &self,
+        _kind: &str,
+        _supplier_ref: &str,
+    ) -> Result<Vec<DispatchRecord>, WerkaPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn werka_archive(
+        &self,
+        _kind: &str,
+        _period: &str,
+        _from: Option<Date>,
+        _to: Option<Date>,
+    ) -> Result<WerkaArchiveResponse, WerkaPortError> {
+        Ok(WerkaArchiveResponse::default())
+    }
+
+    async fn werka_suppliers(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierDirectoryEntry>, WerkaPortError> {
+        assert_eq!(query, "");
+        assert_eq!(limit, 200);
+        assert_eq!(offset, 0);
         Ok(Vec::new())
     }
 }
