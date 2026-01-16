@@ -1,3 +1,4 @@
+mod archive_pdf;
 pub mod handlers;
 pub mod router;
 

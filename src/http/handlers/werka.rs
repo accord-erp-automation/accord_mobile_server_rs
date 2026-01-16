@@ -1,6 +1,7 @@
 use axum::Json;
+use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Response, StatusCode, header};
 use serde::Deserialize;
 use time::{Date, Month};
 
@@ -10,6 +11,7 @@ use crate::core::werka::models::{
     DispatchRecord, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
     WerkaStatusBreakdownEntry,
 };
+use crate::http::archive_pdf::build_archive_pdf;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +95,38 @@ pub async fn archive(
             }),
         )),
     }
+}
+
+pub async fn archive_pdf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ArchiveQuery>,
+) -> Result<Response<Body>, (StatusCode, Json<ErrorResponse>)> {
+    let principal = authorize(&state, &headers).await?;
+    require_werka(&principal)?;
+
+    let from = parse_archive_date(query.from.as_deref()).map_err(|_| archive_pdf_failed())?;
+    let to = parse_archive_date(query.to.as_deref()).map_err(|_| archive_pdf_failed())?;
+    let kind = query.kind.as_deref().unwrap_or("").trim();
+    let period = query.period.as_deref().unwrap_or("").trim();
+    let data = match state.werka.archive(kind, period, from, to).await {
+        Ok(Some(data)) => data,
+        Ok(None) | Err(_) => return Err(archive_pdf_failed()),
+    };
+
+    let filename = format!("werka-{}-{}.pdf", data.kind, data.period);
+    let mut response = Response::new(Body::from(build_archive_pdf(&data)));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|_| archive_pdf_failed())?,
+    );
+    Ok(response)
 }
 
 pub async fn pending(
@@ -220,6 +254,15 @@ fn archive_failed() -> (StatusCode, Json<ErrorResponse>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ErrorResponse {
             error: "werka archive failed",
+        }),
+    )
+}
+
+fn archive_pdf_failed() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: "werka archive pdf failed",
         }),
     )
 }

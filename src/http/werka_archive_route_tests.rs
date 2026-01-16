@@ -152,6 +152,106 @@ async fn werka_archive_accepts_post_like_go_handler() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn werka_archive_pdf_requires_auth() {
+    let app = build_router(test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn werka_archive_pdf_fails_without_provider_like_go() {
+    let state = test_state();
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(value["error"], "werka archive pdf failed");
+}
+
+#[tokio::test]
+async fn werka_archive_pdf_returns_pdf_with_go_headers() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly&from=2026-01-16&to=2026-01-20")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("content-type"),
+        "application/pdf"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .expect("content-disposition"),
+        "attachment; filename=\"werka-sent-monthly.pdf\""
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert!(bytes.starts_with(b"%PDF-1.4\n"));
+    assert!(bytes.ends_with(b"%%EOF\n"));
+}
+
+#[tokio::test]
+async fn werka_archive_pdf_accepts_post_like_go_handler() {
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_lookup(Arc::new(FakeWerkaLookup));
+    let token = werka_session(&state).await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mobile/werka/archive/pdf?kind=sent&period=monthly")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn werka_session(state: &AppState) -> String {
     state
         .sessions
@@ -220,7 +320,19 @@ impl WerkaHomeLookup for FakeWerkaLookup {
                 record_count: 1,
                 totals_by_uom: Vec::new(),
             },
-            items: Vec::new(),
+            items: vec![DispatchRecord {
+                id: "DN-001".to_string(),
+                record_type: "delivery_note".to_string(),
+                supplier_name: "Customer".to_string(),
+                item_code: "ITEM-001".to_string(),
+                item_name: "Item".to_string(),
+                uom: "Kg".to_string(),
+                sent_qty: 12.0,
+                accepted_qty: 10.0,
+                status: "partial".to_string(),
+                created_label: "2026-01-16".to_string(),
+                ..DispatchRecord::default()
+            }],
         })
     }
 }
