@@ -8,6 +8,7 @@ use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::werka::models::{NotificationCommentCreateRequest, NotificationDetail};
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
+use crate::http::handlers::push_notify::send_dispatch_record;
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationDetailQuery {
@@ -108,7 +109,7 @@ pub async fn comment(
     match state
         .werka
         .add_notification_comment(
-            principal.role,
+            principal.role.clone(),
             &principal.ref_,
             &principal.display_name,
             &receipt_id,
@@ -116,7 +117,37 @@ pub async fn comment(
         )
         .await
     {
-        Ok(Some(detail)) => Ok(Json(detail)),
+        Ok(Some(detail)) => {
+            if principal.role == PrincipalRole::Supplier
+                && request
+                    .message
+                    .trim()
+                    .to_lowercase()
+                    .starts_with("tasdiqlayman")
+            {
+                let mut record = detail.record.clone();
+                record.id = format!(
+                    "supplier_ack:{}:{}",
+                    record.id.trim(),
+                    time::OffsetDateTime::now_utc().unix_timestamp()
+                );
+                record.event_type = "supplier_ack".to_string();
+                record.highlight = "Supplier mahsulotni qaytarganingizni tasdiqladi".to_string();
+                record.note.clear();
+                send_dispatch_record(
+                    &state,
+                    "werka:werka".to_string(),
+                    "Supplier tasdiqladi",
+                    &record.highlight,
+                    &record,
+                    PrincipalRole::Werka,
+                    "werka",
+                    "werka acknowledgment event",
+                )
+                .await;
+            }
+            Ok(Json(detail))
+        }
         Ok(None) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

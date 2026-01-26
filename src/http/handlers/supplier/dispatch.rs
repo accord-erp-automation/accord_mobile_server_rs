@@ -5,8 +5,10 @@ use axum::http::{HeaderMap, Method, StatusCode};
 
 use super::authz::{authorize, require_supplier};
 use crate::app::AppState;
+use crate::core::auth::models::PrincipalRole;
 use crate::core::werka::models::{CreateDispatchRequest, DispatchRecord};
 use crate::http::handlers::auth::ErrorResponse;
+use crate::http::handlers::push_notify::send_dispatch_record;
 
 pub async fn create_dispatch(
     State(state): State<AppState>,
@@ -45,7 +47,23 @@ pub async fn create_dispatch(
         )
         .await
     {
-        Ok(Some(record)) => Ok(Json(record)),
+        Ok(Some(record)) => {
+            send_dispatch_record(
+                &state,
+                "werka:werka".to_string(),
+                &record.supplier_name,
+                &format!(
+                    "{} • {:.0} {} qabul kutmoqda.",
+                    record.item_code, record.sent_qty, record.uom
+                ),
+                &record,
+                PrincipalRole::Werka,
+                "werka",
+                "werka dispatch notify",
+            )
+            .await;
+            Ok(Json(record))
+        }
         Ok(None) | Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

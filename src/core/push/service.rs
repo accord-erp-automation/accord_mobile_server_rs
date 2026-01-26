@@ -1,16 +1,28 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::push::ports::{PushServiceError, PushTokenStorePort};
+use crate::core::push::ports::{
+    NoopPushSender, PushSendError, PushSenderPort, PushServiceError, PushTokenStorePort,
+};
 
 #[derive(Clone)]
 pub struct PushService {
     store: Arc<dyn PushTokenStorePort>,
+    sender: Arc<dyn PushSenderPort>,
 }
 
 impl PushService {
     pub fn new(store: Arc<dyn PushTokenStorePort>) -> Self {
-        Self { store }
+        Self {
+            store,
+            sender: Arc::new(NoopPushSender),
+        }
+    }
+
+    pub fn with_sender(mut self, sender: Arc<dyn PushSenderPort>) -> Self {
+        self.sender = sender;
+        self
     }
 
     #[cfg(test)]
@@ -39,6 +51,16 @@ impl PushService {
         }
         self.store.delete(&push_token_key(principal), token).await?;
         Ok(())
+    }
+
+    pub async fn send_to_key(
+        &self,
+        key: &str,
+        title: &str,
+        body: &str,
+        data: HashMap<String, String>,
+    ) -> Result<(), PushSendError> {
+        self.sender.send_to_key(key, title, body, data).await
     }
 }
 

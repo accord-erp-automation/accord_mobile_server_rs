@@ -12,6 +12,7 @@ use crate::core::customer::models::{
 use crate::core::customer::ports::CustomerServiceError;
 use crate::core::werka::models::DispatchRecord;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
+use crate::http::handlers::push_notify::send_dispatch_record;
 
 pub async fn summary(
     State(state): State<AppState>,
@@ -107,7 +108,31 @@ pub async fn respond(
     })?;
 
     match state.customer.respond(&principal, request).await {
-        Ok(Some(detail)) => Ok(Json(detail)),
+        Ok(Some(detail)) => {
+            send_dispatch_record(
+                &state,
+                "werka:werka".to_string(),
+                "Customer javob berdi",
+                &detail.record.note,
+                &detail.record,
+                PrincipalRole::Werka,
+                "werka",
+                "werka customer response",
+            )
+            .await;
+            send_dispatch_record(
+                &state,
+                "admin:admin".to_string(),
+                "Customer javob berdi",
+                &detail.record.note,
+                &detail.record,
+                PrincipalRole::Admin,
+                "admin",
+                "admin customer response",
+            )
+            .await;
+            Ok(Json(detail))
+        }
         Ok(None) => Err(server_error("customer respond failed")),
         Err(CustomerServiceError::Unauthorized) => Err(forbidden()),
         Err(CustomerServiceError::InvalidInput) => Err((

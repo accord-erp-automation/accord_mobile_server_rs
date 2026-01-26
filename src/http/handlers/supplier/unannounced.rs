@@ -5,8 +5,10 @@ use axum::http::{HeaderMap, Method, StatusCode};
 
 use super::authz::{authorize, require_supplier};
 use crate::app::AppState;
+use crate::core::auth::models::PrincipalRole;
 use crate::core::werka::models::{NotificationDetail, SupplierUnannouncedResponseRequest};
 use crate::http::handlers::auth::ErrorResponse;
+use crate::http::handlers::push_notify::send_dispatch_record;
 
 pub async fn unannounced_respond(
     State(state): State<AppState>,
@@ -46,7 +48,20 @@ pub async fn unannounced_respond(
         )
         .await
     {
-        Ok(Some(detail)) => Ok(Json(detail)),
+        Ok(Some(detail)) => {
+            send_dispatch_record(
+                &state,
+                "werka:werka".to_string(),
+                "Supplier javob berdi",
+                &detail.record.note,
+                &detail.record,
+                PrincipalRole::Werka,
+                "werka",
+                "werka unannounced response",
+            )
+            .await;
+            Ok(Json(detail))
+        }
         Ok(None) | Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

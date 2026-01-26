@@ -12,6 +12,7 @@ use crate::core::werka::models::{
 };
 use crate::core::werka::ports::WerkaPortError;
 use crate::http::handlers::auth::ErrorResponse;
+use crate::http::handlers::push_notify::send_customer_issue;
 use crate::http::handlers::werka::authz::{authorize, require_werka};
 
 #[derive(Serialize)]
@@ -56,7 +57,10 @@ pub async fn customer_issue_create(
         .create_customer_issue(customer_issue_input_from_request(request))
         .await
     {
-        Ok(Some(record)) => Ok(Json(record)),
+        Ok(Some(record)) => {
+            send_customer_issue(&state, &record, "customer delivery note").await;
+            Ok(Json(record))
+        }
         Ok(None) | Err(WerkaPortError::WriteFailed(_)) | Err(WerkaPortError::LookupFailed) => {
             Err(customer_issue_create_failed())
         }
@@ -129,7 +133,14 @@ pub async fn customer_issue_batch_create(
         .create_customer_issue_batch(&client_batch_id, lines)
         .await
     {
-        Ok(Some(result)) => Ok(Json(result)),
+        Ok(Some(result)) => {
+            for created in &result.created {
+                if let Some(record) = &created.record {
+                    send_customer_issue(&state, record, "customer delivery note batch line").await;
+                }
+            }
+            Ok(Json(result))
+        }
         Ok(None) | Err(_) => Err(customer_issue_create_failed()),
     }
 }

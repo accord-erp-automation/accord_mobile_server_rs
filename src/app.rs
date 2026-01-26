@@ -10,6 +10,7 @@ use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
 use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
+use crate::fcm::discover_push_sender;
 use crate::store::admin_state_store::AdminSupplierStateStore;
 use crate::store::profile_store::ProfileStore;
 use crate::store::push_token_store::PushTokenStore;
@@ -32,7 +33,8 @@ impl AppState {
         let profile_store = Arc::new(ProfileStore::new(config.profile_store_path.clone()));
         let push_token_store = Arc::new(PushTokenStore::new(config.push_token_store_path.clone()));
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
-        let push = PushService::new(push_token_store);
+        let push = PushService::new(push_token_store.clone())
+            .with_sender(discover_push_sender(push_token_store));
         let mut werka = WerkaService::new();
         let sessions = SessionManager::persistent(
             config.session_store_path.clone(),

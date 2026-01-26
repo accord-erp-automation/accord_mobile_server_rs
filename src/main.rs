@@ -5,6 +5,7 @@ mod core;
 mod erpdb;
 mod erpnext;
 mod error;
+mod fcm;
 mod http;
 mod store;
 
