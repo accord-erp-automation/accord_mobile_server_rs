@@ -4,8 +4,9 @@ use time::Date;
 
 use crate::config::DirectDbConfig;
 use crate::core::werka::models::{
-    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, SupplierDirectoryEntry,
-    SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, StockEntryBarcodeEntry,
+    SupplierDirectoryEntry, SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    WerkaStatusBreakdownEntry,
 };
 use crate::erpdb::werka_archive::read_werka_archive;
 use crate::erpdb::werka_customers::read_werka_customers;
@@ -234,6 +235,14 @@ impl DirectDbReader {
     ) -> Result<Vec<CustomerItemOption>, sqlx::Error> {
         read_werka_customer_item_options(&self.pool, &self.default_warehouse, query, limit, offset)
             .await
+    }
+
+    pub(crate) async fn stock_entries_by_barcode(
+        &self,
+        barcode: &str,
+        limit: usize,
+    ) -> Result<Vec<StockEntryBarcodeEntry>, sqlx::Error> {
+        crate::erpdb::stock_entry::read_stock_entries_by_barcode(&self.pool, barcode, limit).await
     }
 }
 

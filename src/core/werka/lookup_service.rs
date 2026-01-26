@@ -1,8 +1,9 @@
 use time::Date;
 
 use crate::core::werka::models::{
-    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, SupplierDirectoryEntry,
-    SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, StockEntryBarcodeLookup,
+    SupplierDirectoryEntry, SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    WerkaStatusBreakdownEntry,
 };
 use crate::core::werka::ports::WerkaPortError;
 use crate::core::werka::service::WerkaService;
@@ -160,5 +161,26 @@ impl WerkaService {
             .werka_customer_item_options(query, limit, offset)
             .await
             .map(Some)
+    }
+
+    pub async fn stock_entry_lookup_by_barcode(
+        &self,
+        barcode: &str,
+        limit: usize,
+    ) -> Result<Option<StockEntryBarcodeLookup>, WerkaPortError> {
+        let normalized = barcode.trim().to_uppercase();
+        if normalized.is_empty() {
+            return Err(WerkaPortError::InvalidInput);
+        }
+        let Some(lookup) = &self.lookup else {
+            return Ok(None);
+        };
+
+        let entries = lookup.stock_entries_by_barcode(&normalized, limit).await?;
+        Ok(Some(StockEntryBarcodeLookup {
+            barcode: normalized,
+            count: entries.len(),
+            entries,
+        }))
     }
 }

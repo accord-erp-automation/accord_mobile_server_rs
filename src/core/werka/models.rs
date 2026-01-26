@@ -112,6 +112,36 @@ pub struct WerkaArchiveResponse {
     pub items: Vec<DispatchRecord>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StockEntryBarcodeEntry {
+    pub stock_entry_name: String,
+    pub stock_entry_type: String,
+    pub doc_status: i32,
+    pub status: String,
+    pub company: String,
+    pub posting_date: String,
+    pub posting_time: String,
+    pub creation: String,
+    pub modified: String,
+    pub remarks: String,
+    pub line_index: i32,
+    pub item_code: String,
+    pub item_name: String,
+    pub qty: f64,
+    pub uom: String,
+    pub stock_uom: String,
+    pub barcode: String,
+    pub source_warehouse: String,
+    pub target_warehouse: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StockEntryBarcodeLookup {
+    pub barcode: String,
+    pub count: usize,
+    pub entries: Vec<StockEntryBarcodeEntry>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupplierDirectoryEntry {
     #[serde(rename = "ref")]

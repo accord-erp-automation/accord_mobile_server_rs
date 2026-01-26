@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use time::Date;
 
 use crate::core::werka::models::{
-    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, SupplierDirectoryEntry,
-    SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, StockEntryBarcodeEntry,
+    SupplierDirectoryEntry, SupplierItem, WerkaArchiveResponse, WerkaHomeData, WerkaHomeSummary,
+    WerkaStatusBreakdownEntry,
 };
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::erpdb::reader::DirectDbReader;
@@ -110,6 +111,22 @@ impl WerkaHomeLookup for DirectDbReader {
         self.customer_item_options(query, limit, offset)
             .await
             .map_err(database_error)
+    }
+
+    async fn stock_entries_by_barcode(
+        &self,
+        barcode: &str,
+        limit: usize,
+    ) -> Result<Vec<StockEntryBarcodeEntry>, WerkaPortError> {
+        let entries = self
+            .stock_entries_by_barcode(barcode, limit)
+            .await
+            .map_err(database_error)?;
+        if entries.is_empty() {
+            Err(WerkaPortError::NotFound)
+        } else {
+            Ok(entries)
+        }
     }
 }
 

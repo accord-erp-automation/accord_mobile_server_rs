@@ -2,6 +2,7 @@ mod credentials;
 mod customer_issue;
 mod notification_detail;
 pub mod reader;
+mod stock_entry;
 mod supplier_read;
 mod werka_archive;
 mod werka_customers;

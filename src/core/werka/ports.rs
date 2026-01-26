@@ -3,9 +3,9 @@ use time::Date;
 
 use crate::core::werka::models::{
     CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, NotificationDetail,
-    SupplierDirectoryEntry, SupplierHomeSummary, SupplierItem, WerkaAiSearchSuggestion,
-    WerkaArchiveResponse, WerkaCustomerIssueRecord, WerkaHomeData, WerkaHomeSummary,
-    WerkaStatusBreakdownEntry,
+    StockEntryBarcodeEntry, SupplierDirectoryEntry, SupplierHomeSummary, SupplierItem,
+    WerkaAiSearchSuggestion, WerkaArchiveResponse, WerkaCustomerIssueRecord, WerkaHomeData,
+    WerkaHomeSummary, WerkaStatusBreakdownEntry,
 };
 
 #[async_trait]
@@ -85,6 +85,13 @@ pub trait WerkaHomeLookup: Send + Sync {
         _offset: usize,
     ) -> Result<Vec<CustomerItemOption>, WerkaPortError> {
         Ok(Vec::new())
+    }
+    async fn stock_entries_by_barcode(
+        &self,
+        _barcode: &str,
+        _limit: usize,
+    ) -> Result<Vec<StockEntryBarcodeEntry>, WerkaPortError> {
+        Err(WerkaPortError::DirectDbLookupUnavailable)
     }
 }
 
@@ -468,6 +475,10 @@ pub enum WerkaPortError {
     Database(String),
     #[error("invalid input")]
     InvalidInput,
+    #[error("not found")]
+    NotFound,
+    #[error("direct db lookup unavailable")]
+    DirectDbLookupUnavailable,
     #[error("insufficient stock")]
     InsufficientStock,
     #[error("duplicate customer issue source")]
