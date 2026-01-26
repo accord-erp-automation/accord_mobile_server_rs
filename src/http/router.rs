@@ -23,6 +23,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/mobile/profile/avatar/view", get(profile::avatar_view))
         .route("/v1/mobile/supplier/history", any(supplier::history))
+        .route(
+            "/v1/mobile/supplier/status-breakdown",
+            any(supplier::status_breakdown),
+        )
         .route("/v1/mobile/supplier/summary", any(supplier::summary))
         .route(
             "/v1/mobile/supplier/unannounced/respond",

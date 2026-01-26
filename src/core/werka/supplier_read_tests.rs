@@ -98,6 +98,53 @@ async fn supplier_history_adds_supplier_ack_note_only_for_records_that_need_scan
     );
 }
 
+#[tokio::test]
+async fn supplier_status_breakdown_groups_filters_and_sorts_like_go() {
+    let service = WerkaService::new().with_supplier_purchase_receipt_lookup(std::sync::Arc::new(
+        FakeSupplierReceipts {
+            calls: Mutex::new(Vec::new()),
+            comments_calls: Mutex::new(Vec::new()),
+            receipts: vec![
+                receipt(
+                    "PR-A1",
+                    1,
+                    "Completed",
+                    4.0,
+                    "TG:+998:20260126090000:4.0000",
+                ),
+                receipt(
+                    "PR-A2",
+                    1,
+                    "Completed",
+                    2.0,
+                    "TG:+998:20260126090001:3.0000",
+                ),
+                receipt(
+                    "PR-B1",
+                    1,
+                    "Completed",
+                    1.0,
+                    "TG:+998:20260126090002:1.0000",
+                ),
+                receipt("PR-C1", 0, "Draft", 5.0, "TG:+998:20260126090003:5.0000"),
+            ],
+        },
+    ));
+
+    let items = service
+        .supplier_status_breakdown("SUP-001", "Supplier", "submitted")
+        .await
+        .expect("breakdown result")
+        .expect("breakdown");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].item_code, "ITEM-001");
+    assert_eq!(items[0].receipt_count, 2);
+    assert_eq!(items[0].total_sent_qty, 5.0);
+    assert_eq!(items[0].total_accepted_qty, 5.0);
+    assert_eq!(items[0].total_returned_qty, 0.0);
+}
+
 struct FakeSupplierReceipts {
     calls: Mutex<Vec<(usize, usize)>>,
     comments_calls: Mutex<Vec<Vec<String>>>,

@@ -1,10 +1,13 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use serde::Deserialize;
 
 use super::authz::{authorize, require_supplier};
 use crate::app::AppState;
-use crate::core::werka::models::{DispatchRecord, SupplierHomeSummary};
+use crate::core::werka::models::{
+    DispatchRecord, SupplierHomeSummary, SupplierStatusBreakdownEntry,
+};
 use crate::http::handlers::auth::ErrorResponse;
 
 pub async fn summary(
@@ -49,4 +52,33 @@ pub async fn history(
             }),
         )),
     }
+}
+
+pub async fn status_breakdown(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SupplierStatusBreakdownQuery>,
+) -> Result<Json<Vec<SupplierStatusBreakdownEntry>>, (StatusCode, Json<ErrorResponse>)> {
+    let principal = authorize(&state, &headers).await?;
+    require_supplier(&principal)?;
+
+    let kind = query.kind.as_deref().unwrap_or("").trim();
+    match state
+        .werka
+        .supplier_status_breakdown(&principal.ref_, &principal.display_name, kind)
+        .await
+    {
+        Ok(Some(items)) => Ok(Json(items)),
+        Ok(None) | Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "supplier status breakdown failed",
+            }),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SupplierStatusBreakdownQuery {
+    pub kind: Option<String>,
 }

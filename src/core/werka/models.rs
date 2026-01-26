@@ -61,6 +61,17 @@ pub struct SupplierHomeSummary {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupplierStatusBreakdownEntry {
+    pub item_code: String,
+    pub item_name: String,
+    pub receipt_count: i64,
+    pub total_sent_qty: f64,
+    pub total_accepted_qty: f64,
+    pub total_returned_qty: f64,
+    pub uom: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WerkaHomeData {
     pub summary: WerkaHomeSummary,
     pub pending_items: Vec<DispatchRecord>,

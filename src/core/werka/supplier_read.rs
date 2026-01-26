@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::core::werka::models::{DispatchRecord, SupplierHomeSummary};
+use crate::core::werka::models::{
+    DispatchRecord, SupplierHomeSummary, SupplierStatusBreakdownEntry,
+};
 use crate::core::werka::ports::{
     PurchaseReceiptComment, PurchaseReceiptDraft, SupplierPurchaseReceiptLookup, WerkaPortError,
 };
@@ -48,6 +50,24 @@ impl WerkaService {
             receipts,
             &comments_by_receipt,
             supplier_display_name,
+        )))
+    }
+
+    pub async fn supplier_status_breakdown(
+        &self,
+        supplier_ref: &str,
+        supplier_display_name: &str,
+        kind: &str,
+    ) -> Result<Option<Vec<SupplierStatusBreakdownEntry>>, WerkaPortError> {
+        let Some(lookup) = &self.supplier_purchase_receipt_lookup else {
+            return Ok(None);
+        };
+
+        let receipts = collect_supplier_purchase_receipts(lookup.as_ref(), supplier_ref).await?;
+        Ok(Some(build_supplier_status_breakdown_from_receipts(
+            receipts,
+            supplier_display_name,
+            kind,
         )))
     }
 }
@@ -148,6 +168,63 @@ fn build_supplier_history_from_receipts(
             record
         })
         .collect()
+}
+
+fn build_supplier_status_breakdown_from_receipts(
+    receipts: Vec<PurchaseReceiptDraft>,
+    supplier_display_name: &str,
+    kind: &str,
+) -> Vec<SupplierStatusBreakdownEntry> {
+    let mut grouped = HashMap::<String, SupplierStatusBreakdownEntry>::new();
+    for receipt in receipts {
+        let record = purchase_receipt_to_dispatch_record(receipt, supplier_display_name);
+        if !record_matches_supplier_breakdown(&record, kind) {
+            continue;
+        }
+        let key = if record.item_code.trim().is_empty() {
+            record.item_name.trim().to_string()
+        } else {
+            record.item_code.trim().to_string()
+        };
+        let entry = grouped
+            .entry(key)
+            .or_insert_with(|| SupplierStatusBreakdownEntry {
+                item_code: record.item_code.clone(),
+                item_name: record.item_name.clone(),
+                uom: record.uom.clone(),
+                ..SupplierStatusBreakdownEntry::default()
+            });
+        entry.receipt_count += 1;
+        entry.total_sent_qty += record.sent_qty;
+        entry.total_accepted_qty += record.accepted_qty;
+        entry.total_returned_qty += (record.sent_qty - record.accepted_qty).max(0.0);
+        if entry.uom.trim().is_empty() {
+            entry.uom = record.uom;
+        }
+    }
+
+    let mut result = grouped.into_values().collect::<Vec<_>>();
+    result.sort_by(|left, right| {
+        right.receipt_count.cmp(&left.receipt_count).then_with(|| {
+            left.item_name
+                .to_lowercase()
+                .cmp(&right.item_name.to_lowercase())
+        })
+    });
+    result
+}
+
+fn record_matches_supplier_breakdown(record: &DispatchRecord, kind: &str) -> bool {
+    match kind.trim() {
+        "pending" => record.status == "pending" || record.status == "draft",
+        "submitted" => record.status == "accepted",
+        "returned" => {
+            record.status == "partial"
+                || record.status == "rejected"
+                || record.status == "cancelled"
+        }
+        _ => false,
+    }
 }
 
 fn dispatch_record_needs_comment_scan(record: &DispatchRecord) -> bool {
