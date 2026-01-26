@@ -33,6 +33,7 @@ impl AppState {
         let mut auth = AuthService::new(&config);
         let mut admin =
             AdminService::new(&config).with_env_persister(Arc::new(DotEnvPersister::new(".env")));
+        admin = admin.with_auth_config_sink(Arc::new(auth.clone()));
         let mut customer = CustomerService::new();
         let profile_store = Arc::new(ProfileStore::new(config.profile_store_path.clone()));
         let push_token_store = Arc::new(PushTokenStore::new(config.push_token_store_path.clone()));

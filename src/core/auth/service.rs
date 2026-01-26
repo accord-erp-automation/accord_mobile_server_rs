@@ -1,24 +1,31 @@
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
-    AdminAccessState, AdminAccessStateLookup, CustomerLookup, SupplierLookup, SupplierRecord,
+    AdminAccessState, AdminAccessStateLookup, AuthConfigSink, CustomerLookup, SupplierLookup,
+    SupplierRecord,
 };
 
 #[derive(Clone)]
 pub struct AuthService {
     supplier_prefix: String,
     werka_prefix: String,
-    werka_code: String,
-    werka_name: String,
-    admin_phone: String,
-    admin_name: String,
+    identity: Arc<RwLock<AuthIdentity>>,
     admin_code: String,
     supplier_lookup: Option<Arc<dyn SupplierLookup>>,
     customer_lookup: Option<Arc<dyn CustomerLookup>>,
     admin_state_lookup: Option<Arc<dyn AdminAccessStateLookup>>,
+}
+
+#[derive(Debug, Clone)]
+struct AuthIdentity {
+    werka_code: String,
+    werka_name: String,
+    admin_phone: String,
+    admin_name: String,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -36,11 +43,13 @@ impl AuthService {
         Self {
             supplier_prefix: blank_default(&config.supplier_prefix, "10"),
             werka_prefix: blank_default(&config.werka_prefix, "20"),
-            werka_code: config.werka_code.trim().to_string(),
-            werka_name: blank_default(&config.werka_name, "Werka"),
-            admin_phone: normalize_config_phone(&config.admin_phone)
-                .unwrap_or_else(|_| config.admin_phone.trim().to_string()),
-            admin_name: blank_default(&config.admin_name, "Admin"),
+            identity: Arc::new(RwLock::new(AuthIdentity {
+                werka_code: config.werka_code.trim().to_string(),
+                werka_name: blank_default(&config.werka_name, "Werka"),
+                admin_phone: normalize_config_phone(&config.admin_phone)
+                    .unwrap_or_else(|_| config.admin_phone.trim().to_string()),
+                admin_name: blank_default(&config.admin_name, "Admin"),
+            })),
             admin_code: config.admin_code.trim().to_string(),
             supplier_lookup: None,
             customer_lookup: None,
@@ -71,16 +80,17 @@ impl AuthService {
     pub async fn login(&self, phone: &str, code: &str) -> Result<Principal, AuthError> {
         let normalized_phone = normalize_phone(phone).map_err(|_| AuthError::InvalidCredentials)?;
         let code = code.trim();
+        let identity = self.identity.read().expect("auth identity lock").clone();
 
-        if !self.admin_phone.is_empty()
-            && self.admin_phone.eq_ignore_ascii_case(&normalized_phone)
+        if !identity.admin_phone.is_empty()
+            && identity.admin_phone.eq_ignore_ascii_case(&normalized_phone)
             && !self.admin_code.is_empty()
             && code == self.admin_code
         {
             return Ok(Principal {
                 role: PrincipalRole::Admin,
-                display_name: self.admin_name.clone(),
-                legal_name: self.admin_name.clone(),
+                display_name: identity.admin_name.clone(),
+                legal_name: identity.admin_name,
                 ref_: "admin".to_string(),
                 phone: normalized_phone,
                 avatar_url: String::new(),
@@ -89,7 +99,7 @@ impl AuthService {
 
         match self.infer_role(code)? {
             PrincipalRole::Supplier => self.login_supplier(&normalized_phone, code).await,
-            PrincipalRole::Werka => self.login_werka(normalized_phone, code),
+            PrincipalRole::Werka => self.login_werka(normalized_phone, code, &identity),
             PrincipalRole::Customer => self.login_customer(&normalized_phone, code).await,
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
@@ -202,12 +212,17 @@ impl AuthService {
         Err(AuthError::InvalidCredentials)
     }
 
-    fn login_werka(&self, normalized_phone: String, code: &str) -> Result<Principal, AuthError> {
-        if !code.is_empty() && code == self.werka_code {
+    fn login_werka(
+        &self,
+        normalized_phone: String,
+        code: &str,
+        identity: &AuthIdentity,
+    ) -> Result<Principal, AuthError> {
+        if !code.is_empty() && code == identity.werka_code {
             return Ok(Principal {
                 role: PrincipalRole::Werka,
-                display_name: self.werka_name.clone(),
-                legal_name: self.werka_name.clone(),
+                display_name: identity.werka_name.clone(),
+                legal_name: identity.werka_name.clone(),
                 ref_: "werka".to_string(),
                 phone: normalized_phone,
                 avatar_url: String::new(),
@@ -229,6 +244,26 @@ impl AuthService {
         } else {
             Err(AuthError::InvalidRole)
         }
+    }
+}
+
+impl AuthConfigSink for AuthService {
+    fn set_runtime_identity(
+        &self,
+        werka_code: &str,
+        werka_name: &str,
+        admin_phone: &str,
+        admin_name: &str,
+    ) {
+        let normalized_admin_phone =
+            normalize_config_phone(admin_phone).unwrap_or_else(|_| admin_phone.trim().to_string());
+        let identity = AuthIdentity {
+            werka_code: werka_code.trim().to_string(),
+            werka_name: blank_default(werka_name, "Werka"),
+            admin_phone: normalized_admin_phone,
+            admin_name: blank_default(admin_name, "Admin"),
+        };
+        *self.identity.write().expect("auth identity lock") = identity;
     }
 }
 

@@ -12,8 +12,8 @@ use crate::core::admin::models::{
     AdminSuppliersPage,
 };
 use crate::core::admin::ports::{
-    AdminCredentialPort, AdminEnvPersister, AdminErpConfigSink, AdminPortError, AdminReadPort,
-    AdminStatePort, AdminWritePort,
+    AdminAuthConfigSink, AdminCredentialPort, AdminEnvPersister, AdminErpConfigSink,
+    AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
 };
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
 use crate::core::auth::service::normalize_phone;
@@ -31,6 +31,7 @@ pub struct AdminService {
     credential_port: Option<Arc<dyn AdminCredentialPort>>,
     env_persister: Option<Arc<dyn AdminEnvPersister>>,
     erp_config_sink: Option<Arc<dyn AdminErpConfigSink>>,
+    auth_config_sink: Option<Arc<dyn AdminAuthConfigSink>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,7 @@ impl AdminService {
             credential_port: None,
             env_persister: None,
             erp_config_sink: None,
+            auth_config_sink: None,
         }
     }
 
@@ -106,6 +108,11 @@ impl AdminService {
 
     pub fn with_erp_config_sink(mut self, erp_config_sink: Arc<dyn AdminErpConfigSink>) -> Self {
         self.erp_config_sink = Some(erp_config_sink);
+        self
+    }
+
+    pub fn with_auth_config_sink(mut self, auth_config_sink: Arc<dyn AdminAuthConfigSink>) -> Self {
+        self.auth_config_sink = Some(auth_config_sink);
         self
     }
 
@@ -195,6 +202,12 @@ impl AdminService {
             &config.erp_api_key,
             &config.erp_api_secret,
             &config.default_target_warehouse,
+        );
+        self.update_auth_runtime(
+            &config.werka_code,
+            &config.werka_name,
+            &config.admin_phone,
+            &config.admin_name,
         );
         if let Some(persister) = &self.env_persister {
             persister.upsert(BTreeMap::from([
@@ -732,6 +745,14 @@ impl AdminService {
         state.custom_code = code.clone();
         self.put_state("werka", state).await?;
         self.config.write().await.werka_code = code;
+        let config = self.config.read().await;
+        self.update_auth_runtime(
+            &config.werka_code,
+            &config.werka_name,
+            &config.admin_phone,
+            &config.admin_name,
+        );
+        drop(config);
         if let Some(persister) = &self.env_persister {
             persister.upsert(BTreeMap::from([(
                 "MOBILE_DEV_WERKA_CODE",
@@ -758,6 +779,18 @@ impl AdminService {
     ) {
         if let Some(sink) = &self.erp_config_sink {
             sink.set_erp_config(base_url, api_key, api_secret, default_warehouse);
+        }
+    }
+
+    fn update_auth_runtime(
+        &self,
+        werka_code: &str,
+        werka_name: &str,
+        admin_phone: &str,
+        admin_name: &str,
+    ) {
+        if let Some(sink) = &self.auth_config_sink {
+            sink.set_runtime_identity(werka_code, werka_name, admin_phone, admin_name);
         }
     }
 

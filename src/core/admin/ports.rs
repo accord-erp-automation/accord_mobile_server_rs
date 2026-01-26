@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 
 use crate::core::admin::models::{AdminDirectoryEntry, AdminState};
+use crate::core::auth::ports::AuthConfigSink;
 use crate::core::werka::models::SupplierItem;
 
 #[async_trait]
@@ -84,6 +85,10 @@ pub trait AdminErpConfigSink: Send + Sync {
         default_warehouse: &str,
     );
 }
+
+pub trait AdminAuthConfigSink: AuthConfigSink {}
+
+impl<T> AdminAuthConfigSink for T where T: AuthConfigSink {}
 
 #[async_trait]
 pub trait AdminWritePort: Send + Sync {

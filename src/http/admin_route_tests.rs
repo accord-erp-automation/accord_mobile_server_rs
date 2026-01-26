@@ -60,6 +60,7 @@ async fn admin_settings_put_uses_direct_credentials_and_default_uom_like_go() {
         .with_read_port(erp.clone())
         .with_write_port(erp)
         .with_state_port(Arc::new(FakeAdminStatePort::new()))
+        .with_auth_config_sink(Arc::new(state.auth.clone()))
         .with_credential_port(credentials.clone());
     let token = session(&state, PrincipalRole::Admin).await;
 
@@ -184,6 +185,65 @@ async fn admin_customers_and_items_read_like_go() {
         .expect("response");
     assert_eq!(groups.status(), StatusCode::OK);
     assert_eq!(json_body(groups).await[0], "All Item Groups");
+}
+
+#[tokio::test]
+async fn admin_settings_put_updates_auth_runtime_like_go() {
+    let mut state = test_state();
+    state.admin = state
+        .admin
+        .clone()
+        .with_auth_config_sink(Arc::new(state.auth.clone()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let update = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/settings",
+            &token,
+            r#"{
+                "erp_url":"https://erp.test",
+                "erp_api_key":"key",
+                "erp_api_secret":"secret",
+                "default_target_warehouse":"Stores - CH",
+                "default_uom":"Kg",
+                "werka_phone":"+998881111111",
+                "werka_name":"Updated Werka",
+                "werka_code":"20UPDATED",
+                "werka_code_locked":false,
+                "werka_code_retry_after_sec":0,
+                "admin_phone":"+998882222222",
+                "admin_name":"Updated Admin"
+            }"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(update.status(), StatusCode::OK);
+
+    let old = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            r#"{"phone":"+998881111111","code":"20ABCDEF1234"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(old.status(), StatusCode::UNAUTHORIZED);
+
+    let new = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            r#"{"phone":"+998881111111","code":"20UPDATED"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(new.status(), StatusCode::OK);
+    let value = json_body(new).await;
+    assert_eq!(value["profile"]["role"], "werka");
+    assert_eq!(value["profile"]["display_name"], "Updated Werka");
 }
 
 #[tokio::test]

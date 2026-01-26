@@ -46,6 +46,16 @@ pub trait AdminAccessStateLookup: Send + Sync {
     async fn list_states(&self) -> Result<BTreeMap<String, AdminAccessState>, AuthPortError>;
 }
 
+pub trait AuthConfigSink: Send + Sync {
+    fn set_runtime_identity(
+        &self,
+        werka_code: &str,
+        werka_name: &str,
+        admin_phone: &str,
+        admin_name: &str,
+    );
+}
+
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
 pub enum AuthPortError {
