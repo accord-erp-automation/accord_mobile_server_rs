@@ -53,6 +53,13 @@ pub struct WerkaHomeSummary {
     pub returned_count: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierHomeSummary {
+    pub pending_count: i64,
+    pub submitted_count: i64,
+    pub returned_count: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WerkaHomeData {
     pub summary: WerkaHomeSummary,

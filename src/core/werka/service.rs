@@ -10,8 +10,9 @@ use crate::core::werka::models::{
 use crate::core::werka::ports::{
     CreateDeliveryNoteInput, CreatePurchaseReceiptInput, CustomerIssueSourceLookup,
     DeliveryNoteStateUpdate, NotificationDetailLookup, NotificationDetailWriter,
-    SupplierUnannouncedWriter, WerkaAiSearch, WerkaConfirmWriter, WerkaCustomerIssueWriter,
-    WerkaHomeLookup, WerkaPortError, WerkaSupplierAdminStateLookup, WerkaUnannouncedWriter,
+    SupplierPurchaseReceiptLookup, SupplierReadLookup, SupplierUnannouncedWriter, WerkaAiSearch,
+    WerkaConfirmWriter, WerkaCustomerIssueWriter, WerkaHomeLookup, WerkaPortError,
+    WerkaSupplierAdminStateLookup, WerkaUnannouncedWriter,
 };
 use crate::core::werka::unannounced::{
     format_notification_comment, purchase_receipt_to_dispatch_record, supplier_admin_state,
@@ -35,6 +36,8 @@ pub struct WerkaService {
     pub(crate) notification_detail_writer: Option<Arc<dyn NotificationDetailWriter>>,
     pub(crate) notification_detail_lookup: Option<Arc<dyn NotificationDetailLookup>>,
     supplier_admin_state_lookup: Option<Arc<dyn WerkaSupplierAdminStateLookup>>,
+    pub(crate) supplier_read_lookup: Option<Arc<dyn SupplierReadLookup>>,
+    pub(crate) supplier_purchase_receipt_lookup: Option<Arc<dyn SupplierPurchaseReceiptLookup>>,
 }
 
 impl WerkaService {
@@ -108,6 +111,19 @@ impl WerkaService {
         lookup: Arc<dyn WerkaSupplierAdminStateLookup>,
     ) -> Self {
         self.supplier_admin_state_lookup = Some(lookup);
+        self
+    }
+
+    pub fn with_supplier_read_lookup(mut self, lookup: Arc<dyn SupplierReadLookup>) -> Self {
+        self.supplier_read_lookup = Some(lookup);
+        self
+    }
+
+    pub fn with_supplier_purchase_receipt_lookup(
+        mut self,
+        lookup: Arc<dyn SupplierPurchaseReceiptLookup>,
+    ) -> Self {
+        self.supplier_purchase_receipt_lookup = Some(lookup);
         self
     }
 

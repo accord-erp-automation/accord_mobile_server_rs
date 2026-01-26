@@ -11,6 +11,8 @@ mod profile_route_tests;
 #[cfg(test)]
 mod router_tests;
 #[cfg(test)]
+mod supplier_read_route_tests;
+#[cfg(test)]
 mod supplier_unannounced_route_tests;
 #[cfg(test)]
 mod werka_ai_search_route_tests;

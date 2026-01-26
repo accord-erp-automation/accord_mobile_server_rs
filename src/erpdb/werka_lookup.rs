@@ -113,6 +113,6 @@ impl WerkaHomeLookup for DirectDbReader {
     }
 }
 
-fn database_error(error: sqlx::Error) -> WerkaPortError {
+pub(crate) fn database_error(error: sqlx::Error) -> WerkaPortError {
     WerkaPortError::Database(error.to_string())
 }

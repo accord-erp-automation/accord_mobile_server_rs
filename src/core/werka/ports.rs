@@ -3,8 +3,9 @@ use time::Date;
 
 use crate::core::werka::models::{
     CustomerDirectoryEntry, CustomerItemOption, DispatchRecord, NotificationDetail,
-    SupplierDirectoryEntry, SupplierItem, WerkaAiSearchSuggestion, WerkaArchiveResponse,
-    WerkaCustomerIssueRecord, WerkaHomeData, WerkaHomeSummary, WerkaStatusBreakdownEntry,
+    SupplierDirectoryEntry, SupplierHomeSummary, SupplierItem, WerkaAiSearchSuggestion,
+    WerkaArchiveResponse, WerkaCustomerIssueRecord, WerkaHomeData, WerkaHomeSummary,
+    WerkaStatusBreakdownEntry,
 };
 
 #[async_trait]
@@ -85,6 +86,24 @@ pub trait WerkaHomeLookup: Send + Sync {
     ) -> Result<Vec<CustomerItemOption>, WerkaPortError> {
         Ok(Vec::new())
     }
+}
+
+#[async_trait]
+pub trait SupplierReadLookup: Send + Sync {
+    async fn supplier_summary(
+        &self,
+        supplier_ref: &str,
+    ) -> Result<SupplierHomeSummary, WerkaPortError>;
+}
+
+#[async_trait]
+pub trait SupplierPurchaseReceiptLookup: Send + Sync {
+    async fn list_supplier_purchase_receipts_page(
+        &self,
+        supplier_ref: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<PurchaseReceiptDraft>, WerkaPortError>;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

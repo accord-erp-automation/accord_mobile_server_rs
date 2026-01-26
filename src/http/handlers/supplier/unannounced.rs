@@ -3,10 +3,10 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, StatusCode};
 
+use super::authz::{authorize, require_supplier};
 use crate::app::AppState;
-use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::werka::models::{NotificationDetail, SupplierUnannouncedResponseRequest};
-use crate::http::handlers::auth::{ErrorResponse, bearer_token};
+use crate::http::handlers::auth::ErrorResponse;
 
 pub async fn unannounced_respond(
     State(state): State<AppState>,
@@ -54,32 +54,4 @@ pub async fn unannounced_respond(
             }),
         )),
     }
-}
-
-async fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Principal, (StatusCode, Json<ErrorResponse>)> {
-    let token = bearer_token(headers).ok_or_else(unauthorized)?;
-    state.sessions.get(&token).await.map_err(|_| unauthorized())
-}
-
-fn require_supplier(principal: &Principal) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if principal.role == PrincipalRole::Supplier {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse { error: "forbidden" }),
-        ))
-    }
-}
-
-fn unauthorized() -> (StatusCode, Json<ErrorResponse>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorResponse {
-            error: "unauthorized",
-        }),
-    )
 }
