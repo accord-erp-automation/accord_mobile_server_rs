@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
@@ -185,6 +186,103 @@ async fn admin_customers_and_items_read_like_go() {
         .expect("response");
     assert_eq!(groups.status(), StatusCode::OK);
     assert_eq!(json_body(groups).await[0], "All Item Groups");
+}
+
+#[tokio::test]
+async fn admin_customer_detail_errors_are_500_like_go() {
+    let mut state = test_state();
+    let erp = Arc::new(CustomerItemsFailReadPort);
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(erp)
+        .with_write_port(Arc::new(FakeAdminReadPort))
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/customers/detail?ref=CUST-001",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(json_body(response).await["error"], "customer detail failed");
+}
+
+#[tokio::test]
+async fn admin_customer_code_regenerate_cooldown_is_500_like_go() {
+    let mut state = test_state();
+    let erp = Arc::new(FakeAdminReadPort);
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(erp.clone())
+        .with_write_port(erp)
+        .with_state_port(Arc::new(LockedCustomerStatePort));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/admin/customers/code/regenerate?ref=CUST-001",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        json_body(response).await["error"],
+        "customer code regenerate failed"
+    );
+}
+
+#[tokio::test]
+async fn admin_supplier_phone_not_found_is_404_like_go() {
+    let mut state = test_state();
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(Arc::new(FakeAdminReadPort))
+        .with_write_port(Arc::new(MissingSupplierWritePort))
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/suppliers/phone?ref=SUP-MISSING",
+            &token,
+            r#"{"phone":"+998901111111"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(response).await["error"], "supplier not found");
+}
+
+#[tokio::test]
+async fn admin_supplier_phone_skips_write_for_removed_supplier_like_go() {
+    let mut state = test_state();
+    let writes = Arc::new(CountingSupplierWritePort::default());
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(Arc::new(FakeAdminReadPort))
+        .with_write_port(writes.clone())
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/suppliers/phone?ref=SUP-003",
+            &token,
+            r#"{"phone":"+998901111111"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(response).await["error"], "supplier not found");
+    assert_eq!(writes.supplier_phone_updates.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -530,6 +628,76 @@ impl AdminReadPort for FakeAdminReadPort {
     }
 }
 
+struct CustomerItemsFailReadPort;
+
+#[async_trait]
+impl AdminReadPort for CustomerItemsFailReadPort {
+    async fn suppliers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.suppliers_page(query, limit, offset).await
+    }
+
+    async fn supplier_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.supplier_by_ref(ref_).await
+    }
+
+    async fn customers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.customers_page(query, limit, offset).await
+    }
+
+    async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.customer_by_ref(ref_).await
+    }
+
+    async fn items_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_page(query, limit, offset).await
+    }
+
+    async fn items_by_codes(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_by_codes(item_codes).await
+    }
+
+    async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
+        FakeAdminReadPort.item_groups(query, limit).await
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        supplier_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .assigned_supplier_items(supplier_ref, limit)
+            .await
+    }
+
+    async fn customer_items(
+        &self,
+        _customer_ref: &str,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+}
+
 #[async_trait]
 impl AdminWritePort for FakeAdminReadPort {
     async fn create_supplier(
@@ -617,6 +785,200 @@ impl AdminWritePort for FakeAdminReadPort {
     }
 }
 
+struct MissingSupplierWritePort;
+
+#[async_trait]
+impl AdminWritePort for MissingSupplierWritePort {
+    async fn create_supplier(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.create_supplier(name, phone).await
+    }
+
+    async fn update_supplier_phone(&self, _ref_: &str, _phone: &str) -> Result<(), AdminPortError> {
+        Err(AdminPortError::NotFound)
+    }
+
+    async fn assign_supplier_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .assign_supplier_item(ref_, item_code)
+            .await
+    }
+
+    async fn unassign_supplier_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .unassign_supplier_item(ref_, item_code)
+            .await
+    }
+
+    async fn create_customer(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.create_customer(name, phone).await
+    }
+
+    async fn update_customer_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError> {
+        FakeAdminReadPort.update_customer_phone(ref_, phone).await
+    }
+
+    async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
+        FakeAdminReadPort.update_customer_code(ref_, code).await
+    }
+
+    async fn assign_customer_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .assign_customer_item(ref_, item_code)
+            .await
+    }
+
+    async fn unassign_customer_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .unassign_customer_item(ref_, item_code)
+            .await
+    }
+
+    async fn create_item(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+    ) -> Result<SupplierItem, AdminPortError> {
+        FakeAdminReadPort
+            .create_item(code, name, uom, item_group)
+            .await
+    }
+
+    async fn update_item_group(
+        &self,
+        item_code: &str,
+        item_group: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .update_item_group(item_code, item_group)
+            .await
+    }
+}
+
+#[derive(Default)]
+struct CountingSupplierWritePort {
+    supplier_phone_updates: AtomicUsize,
+}
+
+#[async_trait]
+impl AdminWritePort for CountingSupplierWritePort {
+    async fn create_supplier(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.create_supplier(name, phone).await
+    }
+
+    async fn update_supplier_phone(&self, _ref_: &str, _phone: &str) -> Result<(), AdminPortError> {
+        self.supplier_phone_updates.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn assign_supplier_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .assign_supplier_item(ref_, item_code)
+            .await
+    }
+
+    async fn unassign_supplier_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .unassign_supplier_item(ref_, item_code)
+            .await
+    }
+
+    async fn create_customer(
+        &self,
+        name: &str,
+        phone: &str,
+    ) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.create_customer(name, phone).await
+    }
+
+    async fn update_customer_phone(&self, ref_: &str, phone: &str) -> Result<(), AdminPortError> {
+        FakeAdminReadPort.update_customer_phone(ref_, phone).await
+    }
+
+    async fn update_customer_code(&self, ref_: &str, code: &str) -> Result<(), AdminPortError> {
+        FakeAdminReadPort.update_customer_code(ref_, code).await
+    }
+
+    async fn assign_customer_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .assign_customer_item(ref_, item_code)
+            .await
+    }
+
+    async fn unassign_customer_item(
+        &self,
+        ref_: &str,
+        item_code: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .unassign_customer_item(ref_, item_code)
+            .await
+    }
+
+    async fn create_item(
+        &self,
+        code: &str,
+        name: &str,
+        uom: &str,
+        item_group: &str,
+    ) -> Result<SupplierItem, AdminPortError> {
+        FakeAdminReadPort
+            .create_item(code, name, uom, item_group)
+            .await
+    }
+
+    async fn update_item_group(
+        &self,
+        item_code: &str,
+        item_group: &str,
+    ) -> Result<(), AdminPortError> {
+        FakeAdminReadPort
+            .update_item_group(item_code, item_group)
+            .await
+    }
+}
+
 struct FakeAdminStatePort {
     states: Mutex<BTreeMap<String, AdminState>>,
 }
@@ -660,6 +1022,26 @@ impl AdminStatePort for FakeAdminStatePort {
 
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
         self.states.lock().await.insert(ref_.to_string(), state);
+        Ok(())
+    }
+}
+
+struct LockedCustomerStatePort;
+
+#[async_trait]
+impl AdminStatePort for LockedCustomerStatePort {
+    async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
+        Ok(BTreeMap::from([(
+            "CUST-001".to_string(),
+            AdminState {
+                custom_code: "30LOCKED".to_string(),
+                cooldown_until: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
+                ..AdminState::default()
+            },
+        )]))
+    }
+
+    async fn put_state(&self, _ref_: &str, _state: AdminState) -> Result<(), AdminPortError> {
         Ok(())
     }
 }

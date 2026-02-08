@@ -235,11 +235,12 @@ pub async fn customer_detail(
     }
     authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
-    match state.admin.customer_detail(ref_).await {
-        Ok(detail) => Ok(Json(detail)),
-        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
-        Err(_) => Err(server_error("customer detail failed")),
-    }
+    state
+        .admin
+        .customer_detail(ref_)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customer detail failed"))
 }
 
 pub async fn items(
@@ -345,14 +346,12 @@ pub async fn customer_code_regenerate(
     }
     authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
-    match state.admin.regenerate_customer_code(ref_).await {
-        Ok(detail) => Ok(Json(detail)),
-        Err(AdminPortError::CodeRegenCooldown) => {
-            Err(too_many_requests("code regenerate cooldown"))
-        }
-        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
-        Err(_) => Err(server_error("customer code regenerate failed")),
-    }
+    state
+        .admin
+        .regenerate_customer_code(ref_)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customer code regenerate failed"))
 }
 
 pub async fn customer_item_add(
@@ -448,12 +447,11 @@ pub async fn supplier_phone(
     authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminPhoneUpdateRequest = parse_json(&body)?;
-    state
-        .admin
-        .update_supplier_phone(ref_, &input.phone)
-        .await
-        .map(Json)
-        .map_err(|_| server_error("supplier phone update failed"))
+    match state.admin.update_supplier_phone(ref_, &input.phone).await {
+        Ok(detail) => Ok(Json(detail)),
+        Err(AdminPortError::NotFound) => Err(not_found("supplier not found")),
+        Err(_) => Err(server_error("supplier phone update failed")),
+    }
 }
 
 pub async fn supplier_items(
@@ -664,7 +662,8 @@ fn json_response<T: Serialize>(value: T) -> Response {
 
 fn optional_search_limit(value: Option<&str>, default: usize, max: usize) -> usize {
     match value.unwrap_or("").trim().parse::<usize>() {
-        Ok(limit) if limit > 0 && limit <= max => limit,
+        Ok(limit) if limit > 0 && max > 0 && limit > max => max,
+        Ok(limit) if limit > 0 => limit,
         _ => default,
     }
 }
@@ -684,6 +683,21 @@ fn optional_offset(value: Option<&str>) -> usize {
         .ok()
         .filter(|value| *value >= 0)
         .unwrap_or(0) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::optional_search_limit;
+
+    #[test]
+    fn optional_search_limit_matches_go_defaults_and_clamp() {
+        assert_eq!(optional_search_limit(None, 20, 50), 20);
+        assert_eq!(optional_search_limit(Some(""), 20, 50), 20);
+        assert_eq!(optional_search_limit(Some("abc"), 20, 50), 20);
+        assert_eq!(optional_search_limit(Some("0"), 20, 50), 20);
+        assert_eq!(optional_search_limit(Some("5"), 20, 50), 5);
+        assert_eq!(optional_search_limit(Some("500"), 20, 50), 50);
+    }
 }
 
 fn unauthorized() -> AdminError {

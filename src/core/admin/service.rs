@@ -233,26 +233,23 @@ impl AdminService {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AdminSupplier>, AdminPortError> {
-        let read = self.read_port()?;
         let states = self.states().await?;
-        let entries = read.suppliers_page("", limit, offset).await?;
+        let entries = self.read_port()?.suppliers_page("", limit, offset).await?;
         self.admin_suppliers_from_entries(entries, &states)
     }
 
     pub async fn suppliers(&self, limit: usize) -> Result<Vec<AdminSupplier>, AdminPortError> {
-        let read = self.read_port()?;
         let states = self.states().await?;
-        let entries = read.suppliers_page("", limit, 0).await?;
+        let entries = self.supplier_entries(limit).await?;
         self.admin_suppliers_from_entries(entries, &states)
     }
 
     pub async fn supplier_summary(
         &self,
-        limit: usize,
+        _limit: usize,
     ) -> Result<AdminSupplierSummary, AdminPortError> {
-        let read = self.read_port()?;
         let states = self.states().await?;
-        let entries = read.suppliers_page("", limit, 0).await?;
+        let entries = self.supplier_entries(0).await?;
         let mut summary = AdminSupplierSummary {
             total_suppliers: entries.len(),
             ..AdminSupplierSummary::default()
@@ -285,9 +282,8 @@ impl AdminService {
         &self,
         limit: usize,
     ) -> Result<Vec<AdminSupplier>, AdminPortError> {
-        let read = self.read_port()?;
         let states = self.states().await?;
-        let entries = read.suppliers_page("", limit, 0).await?;
+        let entries = self.supplier_entries(limit).await?;
         let mut result = Vec::new();
         for entry in entries {
             let state = states.get(entry.ref_.trim()).cloned().unwrap_or_default();
@@ -300,12 +296,8 @@ impl AdminService {
     }
 
     pub async fn supplier_detail(&self, ref_: &str) -> Result<AdminSupplierDetail, AdminPortError> {
+        let (entry, state) = self.supplier_entry_state(ref_, false).await?;
         let read = self.read_port()?;
-        let entry = read.supplier_by_ref(ref_.trim()).await?;
-        let state = self.state_for(&entry.ref_).await?;
-        if state.removed {
-            return Err(AdminPortError::NotFound);
-        }
         let assigned_items = match read.assigned_supplier_items(&entry.ref_, 200).await {
             Ok(items) => items,
             Err(_) => read
@@ -333,9 +325,15 @@ impl AdminService {
         ref_: &str,
         limit: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.read_port()?
-            .assigned_supplier_items(ref_.trim(), limit)
-            .await
+        let (entry, state) = self.supplier_entry_state(ref_, false).await?;
+        let read = self.read_port()?;
+        match read.assigned_supplier_items(&entry.ref_, limit).await {
+            Ok(items) => Ok(items),
+            Err(_) if !state.assigned_item_codes.is_empty() => {
+                read.items_by_codes(&state.assigned_item_codes).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     pub async fn customers(
@@ -384,10 +382,7 @@ impl AdminService {
         if state.removed {
             return Err(AdminPortError::NotFound);
         }
-        let assigned_items = read
-            .customer_items(&entry.ref_, "", 200)
-            .await
-            .unwrap_or_default();
+        let assigned_items = read.customer_items(&entry.ref_, "", 200).await?;
         let now = OffsetDateTime::now_utc();
         Ok(AdminCustomerDetail {
             ref_: entry.ref_,
@@ -463,8 +458,7 @@ impl AdminService {
         ref_: &str,
         blocked: bool,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
-        let mut state = self.state_for(&entry.ref_).await?;
+        let (entry, mut state) = self.supplier_entry_state(ref_, false).await?;
         state.blocked = blocked;
         self.put_state(&entry.ref_, state).await?;
         self.supplier_detail(&entry.ref_).await
@@ -475,11 +469,12 @@ impl AdminService {
         ref_: &str,
         phone: &str,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
+        let (entry, _) = self.supplier_entry_state(ref_, false).await?;
         let normalized = normalize_admin_phone(phone)?;
         self.write_port()?
-            .update_supplier_phone(ref_.trim(), &normalized)
+            .update_supplier_phone(&entry.ref_, &normalized)
             .await?;
-        self.supplier_detail(ref_).await
+        self.supplier_detail(&entry.ref_).await
     }
 
     pub async fn update_customer_phone(
@@ -499,7 +494,7 @@ impl AdminService {
         ref_: &str,
         item_codes: Vec<String>,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
+        let (entry, _) = self.supplier_entry_state(ref_, false).await?;
         let normalized = normalize_item_codes(item_codes);
         if !normalized.is_empty() {
             let found = self.read_port()?.items_by_codes(&normalized).await?;
@@ -554,7 +549,7 @@ impl AdminService {
         ref_: &str,
         item_code: &str,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
+        let (entry, _) = self.supplier_entry_state(ref_, false).await?;
         let code = item_code.trim();
         self.write_port()?
             .assign_supplier_item(&entry.ref_, code)
@@ -577,7 +572,7 @@ impl AdminService {
         ref_: &str,
         item_code: &str,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
+        let (entry, _) = self.supplier_entry_state(ref_, false).await?;
         self.write_port()?
             .unassign_supplier_item(&entry.ref_, item_code.trim())
             .await?;
@@ -626,9 +621,8 @@ impl AdminService {
         &self,
         ref_: &str,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
+        let (entry, mut state) = self.supplier_entry_state(ref_, false).await?;
         let mut existing = self.existing_codes().await?;
-        let mut state = self.state_for(&entry.ref_).await?;
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
         state.custom_code = random_code(&self.config.read().await.supplier_prefix, &mut existing);
@@ -656,8 +650,7 @@ impl AdminService {
     }
 
     pub async fn remove_supplier(&self, ref_: &str) -> Result<(), AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
-        let mut state = self.state_for(&entry.ref_).await?;
+        let (entry, mut state) = self.supplier_entry_state(ref_, false).await?;
         state.removed = true;
         state.blocked = true;
         self.put_state(&entry.ref_, state).await
@@ -667,8 +660,7 @@ impl AdminService {
         &self,
         ref_: &str,
     ) -> Result<AdminSupplierDetail, AdminPortError> {
-        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
-        let mut state = self.state_for(&entry.ref_).await?;
+        let (entry, mut state) = self.supplier_entry_state(ref_, true).await?;
         state.removed = false;
         state.blocked = false;
         self.put_state(&entry.ref_, state).await?;
@@ -801,6 +793,51 @@ impl AdminService {
             .get(ref_.trim())
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn supplier_entries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        const PAGE_SIZE: usize = 200;
+
+        let read = self.read_port()?;
+        let mut result = Vec::new();
+        let mut offset = 0;
+        loop {
+            let mut page_limit = PAGE_SIZE;
+            if limit > 0 {
+                let remaining = limit.saturating_sub(result.len());
+                if remaining == 0 {
+                    break;
+                }
+                page_limit = page_limit.min(remaining);
+            }
+            let page = read.suppliers_page("", page_limit, offset).await?;
+            let page_len = page.len();
+            result.extend(page);
+            if page_len < page_limit || (limit > 0 && result.len() >= limit) {
+                break;
+            }
+            offset += page_limit;
+        }
+        if limit > 0 && result.len() > limit {
+            result.truncate(limit);
+        }
+        Ok(result)
+    }
+
+    async fn supplier_entry_state(
+        &self,
+        ref_: &str,
+        include_removed: bool,
+    ) -> Result<(AdminDirectoryEntry, AdminState), AdminPortError> {
+        let entry = self.read_port()?.supplier_by_ref(ref_.trim()).await?;
+        let state = self.state_for(&entry.ref_).await?;
+        if state.removed && !include_removed {
+            return Err(AdminPortError::NotFound);
+        }
+        Ok((entry, state))
     }
 
     async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
