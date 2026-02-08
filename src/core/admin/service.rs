@@ -9,7 +9,6 @@ use crate::config::AppConfig;
 use crate::core::admin::models::{
     AdminActivity, AdminCustomerDetail, AdminDirectoryEntry, AdminItemGroupBulkMoveResult,
     AdminSettings, AdminState, AdminSupplier, AdminSupplierDetail, AdminSupplierSummary,
-    AdminSuppliersPage,
 };
 use crate::core::admin::ports::{
     AdminAuthConfigSink, AdminCredentialPort, AdminEnvPersister, AdminErpConfigSink,
@@ -118,7 +117,7 @@ impl AdminService {
 
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {
         let config = self.config.read().await;
-        let state = self.state_for("werka").await?;
+        let state = self.state_for("werka").await.unwrap_or_default();
         let now = OffsetDateTime::now_utc();
         let mut api_key = config.erp_api_key.clone();
         let mut api_secret = config.erp_api_secret.clone();
@@ -265,19 +264,6 @@ impl AdminService {
         Ok(summary)
     }
 
-    pub async fn suppliers_home(&self) -> Result<AdminSuppliersPage, AdminPortError> {
-        let summary = self.supplier_summary(300).await?;
-        let suppliers = self.suppliers(100).await?;
-        let customers = self.customers(500).await.unwrap_or_default();
-        let settings = self.settings().await?;
-        Ok(AdminSuppliersPage {
-            summary,
-            suppliers,
-            customers,
-            settings,
-        })
-    }
-
     pub async fn inactive_suppliers(
         &self,
         limit: usize,
@@ -300,10 +286,7 @@ impl AdminService {
         let read = self.read_port()?;
         let assigned_items = match read.assigned_supplier_items(&entry.ref_, 200).await {
             Ok(items) => items,
-            Err(_) => read
-                .items_by_codes(&state.assigned_item_codes)
-                .await
-                .unwrap_or_default(),
+            Err(_) => read.items_by_codes(&state.assigned_item_codes).await?,
         };
         let code = self.supplier_code(&entry, &state)?;
         let now = OffsetDateTime::now_utc();
@@ -509,8 +492,7 @@ impl AdminService {
         let current = self
             .read_port()?
             .assigned_supplier_items(&entry.ref_, 200)
-            .await
-            .unwrap_or_default()
+            .await?
             .into_iter()
             .map(|item| item.code)
             .collect::<Vec<_>>();

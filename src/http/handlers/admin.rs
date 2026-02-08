@@ -12,7 +12,7 @@ use crate::core::admin::models::{
     AdminCreateSupplierRequest, AdminCustomerDetail, AdminItemGroupBulkMoveResult,
     AdminPhoneUpdateRequest, AdminSettings, AdminSupplier, AdminSupplierDetail,
     AdminSupplierItemMutationRequest, AdminSupplierItemsUpdateRequest,
-    AdminSupplierStatusUpdateRequest, AdminSupplierSummary,
+    AdminSupplierStatusUpdateRequest, AdminSupplierSummary, AdminSuppliersPage,
 };
 use crate::core::admin::ports::AdminPortError;
 use crate::core::auth::models::{Principal, PrincipalRole};
@@ -27,10 +27,10 @@ pub async fn settings(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<AdminSettings>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if !matches!(method, Method::GET | Method::PUT) {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match method {
         Method::GET => state
             .admin
@@ -57,17 +57,35 @@ pub async fn suppliers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match method {
-        Method::GET => state
-            .admin
-            .suppliers_home()
-            .await
-            .map(json_response)
-            .map_err(|_| server_error("suppliers fetch failed")),
+        Method::GET => {
+            let summary = state
+                .admin
+                .supplier_summary(300)
+                .await
+                .map_err(|_| server_error("supplier summary failed"))?;
+            let suppliers = state
+                .admin
+                .suppliers(100)
+                .await
+                .map_err(|_| server_error("suppliers fetch failed"))?;
+            let customers = state.admin.customers(500).await.unwrap_or_default();
+            let settings = state
+                .admin
+                .settings()
+                .await
+                .map_err(|_| server_error("suppliers fetch failed"))?;
+            Ok(json_response(AdminSuppliersPage {
+                summary,
+                suppliers,
+                customers,
+                settings,
+            }))
+        }
         Method::POST => {
             let input: AdminCreateSupplierRequest = parse_json(&body)?;
             state
@@ -87,10 +105,10 @@ pub async fn supplier_list(
     headers: HeaderMap,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<AdminSupplier>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     state
         .admin
         .suppliers_page(
@@ -107,10 +125,10 @@ pub async fn supplier_summary(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<AdminSupplierSummary>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     state
         .admin
         .supplier_summary(300)
@@ -125,10 +143,10 @@ pub async fn supplier_detail(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     match state.admin.supplier_detail(ref_).await {
         Ok(detail) => Ok(Json(detail)),
@@ -142,10 +160,10 @@ pub async fn inactive_suppliers(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminSupplier>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     state
         .admin
         .inactive_suppliers(300)
@@ -160,10 +178,10 @@ pub async fn assigned_supplier_items(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<Vec<SupplierItem>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     state
         .admin
@@ -179,10 +197,10 @@ pub async fn customers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match method {
         Method::GET => state
             .admin
@@ -209,10 +227,10 @@ pub async fn customer_list(
     headers: HeaderMap,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<CustomerDirectoryEntry>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     state
         .admin
         .customers_page(
@@ -230,10 +248,10 @@ pub async fn customer_detail(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     state
         .admin
@@ -250,10 +268,10 @@ pub async fn items(
     Query(query): Query<ItemQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match method {
         Method::GET => state
             .admin
@@ -284,10 +302,10 @@ pub async fn item_groups(
     headers: HeaderMap,
     Query(query): Query<ItemQuery>,
 ) -> Result<Json<Vec<String>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     state
         .admin
         .item_groups(query.q.as_deref().unwrap_or(""), 100)
@@ -301,10 +319,10 @@ pub async fn activity(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match state.werka.history().await {
         Ok(Some(history)) => state
             .admin
@@ -323,10 +341,10 @@ pub async fn customer_phone(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminPhoneUpdateRequest = parse_json(&body)?;
     state
@@ -343,10 +361,10 @@ pub async fn customer_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     state
         .admin
@@ -363,10 +381,10 @@ pub async fn customer_item_add(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminSupplierItemMutationRequest = parse_json(&body)?;
     match state
@@ -386,10 +404,10 @@ pub async fn customer_item_remove(
     headers: HeaderMap,
     Query(query): Query<RefItemQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let (ref_, item_code) = required_ref_item(query.ref_.as_deref(), query.item_code.as_deref())?;
     match state.admin.unassign_customer_item(ref_, item_code).await {
         Ok(detail) => Ok(Json(detail)),
@@ -404,10 +422,10 @@ pub async fn customer_remove(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<OkResponse>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     match state.admin.remove_customer(ref_).await {
         Ok(()) => Ok(Json(OkResponse { ok: true })),
@@ -423,10 +441,10 @@ pub async fn supplier_status(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminSupplierStatusUpdateRequest = parse_json(&body)?;
     match state.admin.set_supplier_blocked(ref_, input.blocked).await {
@@ -443,10 +461,10 @@ pub async fn supplier_phone(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminPhoneUpdateRequest = parse_json(&body)?;
     match state.admin.update_supplier_phone(ref_, &input.phone).await {
@@ -463,10 +481,10 @@ pub async fn supplier_items(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminSupplierItemsUpdateRequest = parse_json(&body)?;
     match state
@@ -476,7 +494,6 @@ pub async fn supplier_items(
     {
         Ok(detail) => Ok(Json(detail)),
         Err(AdminPortError::NotFound) => Err(not_found("supplier not found")),
-        Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
         Err(_) => Err(server_error("supplier items update failed")),
     }
 }
@@ -488,10 +505,10 @@ pub async fn supplier_item_add(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     let input: AdminSupplierItemMutationRequest = parse_json(&body)?;
     state
@@ -508,10 +525,10 @@ pub async fn supplier_item_remove(
     headers: HeaderMap,
     Query(query): Query<RefItemQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let (ref_, item_code) = required_ref_item(query.ref_.as_deref(), query.item_code.as_deref())?;
     state
         .admin
@@ -527,10 +544,10 @@ pub async fn supplier_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     match state.admin.regenerate_supplier_code(ref_).await {
         Ok(detail) => Ok(Json(detail)),
@@ -548,10 +565,10 @@ pub async fn supplier_remove(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<OkResponse>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     match state.admin.remove_supplier(ref_).await {
         Ok(()) => Ok(Json(OkResponse { ok: true })),
@@ -566,10 +583,10 @@ pub async fn supplier_restore(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let ref_ = required_ref(query.ref_.as_deref())?;
     match state.admin.restore_supplier(ref_).await {
         Ok(detail) => Ok(Json(detail)),
@@ -584,10 +601,10 @@ pub async fn items_bulk_move_group(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<AdminItemGroupBulkMoveResult>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     let input: AdminBulkMoveItemsRequest = parse_json(&body)?;
     match state
         .admin
@@ -605,10 +622,10 @@ pub async fn werka_code_regenerate(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<AdminSettings>, AdminError> {
+    authorize_admin(&state, &headers).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
-    authorize_admin(&state, &headers).await?;
     match state.admin.regenerate_werka_code().await {
         Ok(settings) => Ok(Json(settings)),
         Err(AdminPortError::CodeRegenCooldown) => {

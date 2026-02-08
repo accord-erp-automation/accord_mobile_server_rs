@@ -37,6 +37,73 @@ async fn admin_settings_requires_admin_like_go() {
 }
 
 #[tokio::test]
+async fn admin_method_checks_happen_after_auth_like_go() {
+    let state = test_state();
+    let cases = [
+        ("PATCH", "/v1/mobile/admin/settings"),
+        ("PATCH", "/v1/mobile/admin/suppliers"),
+        ("POST", "/v1/mobile/admin/suppliers/list"),
+        ("POST", "/v1/mobile/admin/suppliers/summary"),
+        ("POST", "/v1/mobile/admin/suppliers/detail"),
+        ("POST", "/v1/mobile/admin/suppliers/inactive"),
+        ("POST", "/v1/mobile/admin/suppliers/items/assigned"),
+        ("POST", "/v1/mobile/admin/suppliers/status"),
+        ("POST", "/v1/mobile/admin/suppliers/phone"),
+        ("POST", "/v1/mobile/admin/suppliers/items"),
+        ("GET", "/v1/mobile/admin/suppliers/items/add"),
+        ("GET", "/v1/mobile/admin/suppliers/items/remove"),
+        ("GET", "/v1/mobile/admin/suppliers/code/regenerate"),
+        ("GET", "/v1/mobile/admin/suppliers/remove"),
+        ("GET", "/v1/mobile/admin/suppliers/restore"),
+        ("PATCH", "/v1/mobile/admin/customers"),
+        ("POST", "/v1/mobile/admin/customers/list"),
+        ("POST", "/v1/mobile/admin/customers/detail"),
+        ("POST", "/v1/mobile/admin/customers/phone"),
+        ("GET", "/v1/mobile/admin/customers/code/regenerate"),
+        ("GET", "/v1/mobile/admin/customers/items/add"),
+        ("GET", "/v1/mobile/admin/customers/items/remove"),
+        ("GET", "/v1/mobile/admin/customers/remove"),
+        ("PATCH", "/v1/mobile/admin/items"),
+        ("GET", "/v1/mobile/admin/items/bulk-move-group"),
+        ("POST", "/v1/mobile/admin/item-groups"),
+        ("POST", "/v1/mobile/admin/activity"),
+        ("GET", "/v1/mobile/admin/werka/code/regenerate"),
+    ];
+
+    let supplier_token = session(&state, PrincipalRole::Supplier).await;
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    for (method, path) in cases {
+        let unauthorized = build_router(state.clone())
+            .oneshot(request(method, path, ""))
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(json_body(unauthorized).await["error"], "unauthorized");
+
+        let forbidden = build_router(state.clone())
+            .oneshot(request(method, path, &supplier_token))
+            .await
+            .expect("response");
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(json_body(forbidden).await["error"], "forbidden");
+
+        let method_not_allowed = build_router(state.clone())
+            .oneshot(request(method, path, &admin_token))
+            .await
+            .expect("response");
+        assert_eq!(
+            method_not_allowed.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{path}"
+        );
+        assert_eq!(
+            json_body(method_not_allowed).await["error"],
+            "method not allowed"
+        );
+    }
+}
+
+#[tokio::test]
 async fn admin_settings_returns_config_shape_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -52,6 +119,49 @@ async fn admin_settings_returns_config_shape_like_go() {
     assert_eq!(value["default_uom"], "Kg");
     assert_eq!(value["werka_name"], "Werka");
     assert_eq!(value["admin_name"], "Admin");
+}
+
+#[tokio::test]
+async fn admin_settings_ignores_state_read_failure_like_go() {
+    let mut state = test_state();
+    let erp = Arc::new(FakeAdminReadPort);
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(erp.clone())
+        .with_write_port(erp)
+        .with_state_port(Arc::new(FailingAdminStatePort));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/settings", &token))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["werka_code_locked"], false);
+    assert_eq!(value["werka_code_retry_after_sec"], 0);
+}
+
+#[tokio::test]
+async fn admin_suppliers_summary_failure_uses_go_error_text() {
+    let mut state = test_state();
+    let erp = Arc::new(FakeAdminReadPort);
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(erp.clone())
+        .with_write_port(erp)
+        .with_state_port(Arc::new(FailingAdminStatePort));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/suppliers", &token))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        json_body(response).await["error"],
+        "supplier summary failed"
+    );
 }
 
 #[tokio::test]
@@ -285,6 +395,32 @@ async fn admin_supplier_phone_skips_write_for_removed_supplier_like_go() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(json_body(response).await["error"], "supplier not found");
     assert_eq!(writes.supplier_phone_updates.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn admin_supplier_items_invalid_item_is_500_like_go() {
+    let mut state = test_state();
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(Arc::new(MissingItemsReadPort))
+        .with_write_port(Arc::new(FakeAdminReadPort))
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/suppliers/items?ref=SUP-001",
+            &token,
+            r#"{"item_codes":["ITEM-MISSING"]}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        json_body(response).await["error"],
+        "supplier items update failed"
+    );
 }
 
 #[tokio::test]
@@ -733,6 +869,78 @@ impl AdminReadPort for CustomerItemsFailReadPort {
     }
 }
 
+struct MissingItemsReadPort;
+
+#[async_trait]
+impl AdminReadPort for MissingItemsReadPort {
+    async fn suppliers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.suppliers_page(query, limit, offset).await
+    }
+
+    async fn supplier_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.supplier_by_ref(ref_).await
+    }
+
+    async fn customers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.customers_page(query, limit, offset).await
+    }
+
+    async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.customer_by_ref(ref_).await
+    }
+
+    async fn items_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_page(query, limit, offset).await
+    }
+
+    async fn items_by_codes(
+        &self,
+        _item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
+        FakeAdminReadPort.item_groups(query, limit).await
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        supplier_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .assigned_supplier_items(supplier_ref, limit)
+            .await
+    }
+
+    async fn customer_items(
+        &self,
+        customer_ref: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .customer_items(customer_ref, query, limit)
+            .await
+    }
+}
+
 struct ActivityLookup;
 
 #[async_trait]
@@ -1078,6 +1286,19 @@ impl AdminStatePort for FakeAdminStatePort {
     async fn put_state(&self, ref_: &str, state: AdminState) -> Result<(), AdminPortError> {
         self.states.lock().await.insert(ref_.to_string(), state);
         Ok(())
+    }
+}
+
+struct FailingAdminStatePort;
+
+#[async_trait]
+impl AdminStatePort for FailingAdminStatePort {
+    async fn states(&self) -> Result<BTreeMap<String, AdminState>, AdminPortError> {
+        Err(AdminPortError::LookupFailed)
+    }
+
+    async fn put_state(&self, _ref_: &str, _state: AdminState) -> Result<(), AdminPortError> {
+        Err(AdminPortError::LookupFailed)
     }
 }
 
