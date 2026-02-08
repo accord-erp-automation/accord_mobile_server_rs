@@ -2,6 +2,10 @@
 name = "accord_mobile_server_rs"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "Standalone Rust mobile backend for Accord ERPNext workflows."
+repository = "https://github.com/WIKKIwk/accord_mobile_server_rs"
+readme = "README.md"
 
 [dependencies]
 axum = "0.8"

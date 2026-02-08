@@ -1,5 +1,32 @@
 # Accord Mobile Server RS
 
+## What this is
+
+`accord_mobile_server_rs` is a standalone Rust mobile backend for Accord
+ERPNext workflows. It serves the existing mobile app directly and preserves the
+Go mobile API contract: routes, auth order, status codes, JSON shapes, ERPNext
+side effects, push behavior, and runtime settings.
+
+## Why it matters
+
+The service can replace the previous mobile backend without a client-side app
+change. Read-heavy flows use direct ERPNext MariaDB projections when enabled,
+while mutations keep ERPNext REST as the source of truth, giving the mobile app
+the same behavior with lower latency on operational screens.
+
+## Quick Start
+
+```bash
+cp .env.example .env
+cargo fmt --check
+cargo test --locked
+cargo run --release
+```
+
+Configure real `.env` values before production use. At minimum set `ERP_URL`,
+`ERP_API_KEY`, `ERP_API_SECRET`, and the store paths. Enable
+`ERP_DIRECT_READ_ENABLED=1` only when ERPNext database access is configured.
+
 `accord_mobile_server_rs` is an independent Rust service for the Accord mobile
 backend. It is a standalone Axum/Tokio application that speaks directly to the
 mobile clients, ERPNext, the ERPNext MariaDB database when direct reads are
