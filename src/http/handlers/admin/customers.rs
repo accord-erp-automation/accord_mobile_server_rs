@@ -1,0 +1,244 @@
+use super::*;
+
+pub async fn customers(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if !matches!(method, Method::GET | Method::POST) {
+        return Err(method_not_allowed());
+    }
+    match method {
+        Method::GET => state
+            .admin
+            .customers(500)
+            .await
+            .map(json_response)
+            .map_err(|_| server_error("customers fetch failed")),
+        Method::POST => {
+            let input: AdminCreateCustomerRequest = parse_json(&body)?;
+            state
+                .admin
+                .create_customer(&input.name, &input.phone)
+                .await
+                .map(json_response)
+                .map_err(|_| server_error("customer create failed"))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn customer_list(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<Vec<CustomerDirectoryEntry>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    state
+        .admin
+        .customers_page(
+            optional_search_limit(query.limit.as_deref(), 20, 50),
+            optional_offset(query.offset.as_deref()),
+        )
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customers page failed"))
+}
+
+pub async fn customer_detail(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    state
+        .admin
+        .customer_detail(ref_)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customer detail failed"))
+}
+
+pub async fn items(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if !matches!(method, Method::GET | Method::POST) {
+        return Err(method_not_allowed());
+    }
+    match method {
+        Method::GET => state
+            .admin
+            .items_page(
+                query.q.as_deref().unwrap_or(""),
+                positive_int(query.limit.as_deref(), 50),
+                optional_offset(query.offset.as_deref()),
+            )
+            .await
+            .map(json_response)
+            .map_err(|_| server_error("admin items failed")),
+        Method::POST => {
+            let input: AdminCreateItemRequest = parse_json(&body)?;
+            state
+                .admin
+                .create_item(&input.code, &input.name, &input.uom, &input.item_group)
+                .await
+                .map(json_response)
+                .map_err(|_| server_error("admin item create failed"))
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn item_groups(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Result<Json<Vec<String>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    state
+        .admin
+        .item_groups(query.q.as_deref().unwrap_or(""), 100)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("admin item groups failed"))
+}
+
+pub async fn activity(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Json<Vec<DispatchRecord>>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    match state.werka.history().await {
+        Ok(Some(history)) => state
+            .admin
+            .activity(history)
+            .await
+            .map(Json)
+            .map_err(|_| server_error("admin activity failed")),
+        Ok(None) | Err(_) => Err(server_error("admin activity failed")),
+    }
+}
+
+pub async fn customer_phone(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+    body: Bytes,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::PUT {
+        return Err(method_not_allowed());
+    }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    let input: AdminPhoneUpdateRequest = parse_json(&body)?;
+    state
+        .admin
+        .update_customer_phone(ref_, &input.phone)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customer phone update failed"))
+}
+
+pub async fn customer_code_regenerate(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    state
+        .admin
+        .regenerate_customer_code(ref_)
+        .await
+        .map(Json)
+        .map_err(|_| server_error("customer code regenerate failed"))
+}
+
+pub async fn customer_item_add(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+    body: Bytes,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    let input: AdminSupplierItemMutationRequest = parse_json(&body)?;
+    match state
+        .admin
+        .assign_customer_item(ref_, &input.item_code)
+        .await
+    {
+        Ok(detail) => Ok(Json(detail)),
+        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
+        Err(_) => Err(server_error("customer item add failed")),
+    }
+}
+
+pub async fn customer_item_remove(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefItemQuery>,
+) -> Result<Json<AdminCustomerDetail>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::DELETE {
+        return Err(method_not_allowed());
+    }
+    let (ref_, item_code) = required_ref_item(query.ref_.as_deref(), query.item_code.as_deref())?;
+    match state.admin.unassign_customer_item(ref_, item_code).await {
+        Ok(detail) => Ok(Json(detail)),
+        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
+        Err(_) => Err(server_error("customer item remove failed")),
+    }
+}
+
+pub async fn customer_remove(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<RefQuery>,
+) -> Result<Json<OkResponse>, AdminError> {
+    authorize_admin(&state, &headers).await?;
+    if method != Method::DELETE {
+        return Err(method_not_allowed());
+    }
+    let ref_ = required_ref(query.ref_.as_deref())?;
+    match state.admin.remove_customer(ref_).await {
+        Ok(()) => Ok(Json(OkResponse { ok: true })),
+        Err(AdminPortError::NotFound) => Err(not_found("customer not found")),
+        Err(_) => Err(server_error("customer remove failed")),
+    }
+}
