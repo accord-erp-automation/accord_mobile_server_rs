@@ -3,6 +3,51 @@ use super::*;
 
 use async_trait::async_trait;
 
+impl ErpnextClient {
+    async fn admin_item_group_row(&self, name: &str) -> Result<ItemGroupRow, AdminPortError> {
+        let response: GetResponse<ItemGroupRow> = self
+            .admin_get_json(
+                &format!(
+                    "/api/resource/Item Group/{}",
+                    urlencoding::encode(name.trim())
+                ),
+                &[(
+                    "fields",
+                    r#"["name","item_group_name","parent_item_group","is_group","lft","rgt"]"#
+                        .to_string(),
+                )],
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    async fn promote_item_group(&self, name: &str) -> Result<(), AdminPortError> {
+        if name.trim().is_empty() || name.trim() == "All Item Groups" {
+            return Ok(());
+        }
+        self.admin_empty_request(
+            reqwest::Method::PUT,
+            &format!(
+                "/api/resource/Item Group/{}",
+                urlencoding::encode(name.trim())
+            ),
+            serde_json::json!({"is_group": 1}),
+        )
+        .await
+    }
+
+    async fn ensure_item_group_accepts_children(&self, name: &str) -> Result<(), AdminPortError> {
+        if name.trim().is_empty() || name.trim() == "All Item Groups" {
+            return Ok(());
+        }
+        let row = self.admin_item_group_row(name).await?;
+        if row.is_group == 0 {
+            self.promote_item_group(name).await?;
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl AdminWritePort for ErpnextClient {
     async fn create_supplier(
@@ -262,6 +307,7 @@ impl AdminWritePort for ErpnextClient {
         } else {
             parent.trim()
         };
+        self.ensure_item_group_accepts_children(parent).await?;
         let payload = serde_json::json!({
             "item_group_name": name,
             "parent_item_group": parent,
@@ -283,6 +329,11 @@ impl AdminWritePort for ErpnextClient {
         } else {
             parent.trim()
         };
+        let current = self.admin_item_group_row(name).await?;
+        if current.is_group == 0 && current.rgt > current.lft + 1 {
+            self.promote_item_group(name).await?;
+        }
+        self.ensure_item_group_accepts_children(parent).await?;
         let response: GetResponse<ItemGroupRow> = self
             .admin_json_request(
                 reqwest::Method::PUT,
@@ -290,7 +341,10 @@ impl AdminWritePort for ErpnextClient {
                     "/api/resource/Item Group/{}",
                     urlencoding::encode(name.trim())
                 ),
-                serde_json::json!({"parent_item_group": parent}),
+                serde_json::json!({
+                    "parent_item_group": parent,
+                    "old_parent": current.parent_item_group.trim(),
+                }),
             )
             .await?;
         Ok(item_group(response.data))

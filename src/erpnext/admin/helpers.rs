@@ -52,6 +52,10 @@ pub(super) struct ItemGroupRow {
     pub(super) parent_item_group: String,
     #[serde(default)]
     pub(super) is_group: i32,
+    #[serde(default)]
+    pub(super) lft: i64,
+    #[serde(default)]
+    pub(super) rgt: i64,
 }
 
 #[derive(Debug, Deserialize)]
