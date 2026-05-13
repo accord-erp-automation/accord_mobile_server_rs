@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminState};
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState};
 use crate::core::auth::ports::AuthConfigSink;
 use crate::core::werka::models::SupplierItem;
 
@@ -135,6 +135,13 @@ pub trait AdminWritePort: Send + Sync {
         uom: &str,
         item_group: &str,
     ) -> Result<SupplierItem, AdminPortError>;
+
+    async fn create_item_group(
+        &self,
+        name: &str,
+        parent: &str,
+        is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError>;
 
     async fn update_item_group(
         &self,

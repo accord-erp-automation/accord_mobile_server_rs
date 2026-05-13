@@ -110,16 +110,29 @@ pub async fn item_groups(
     method: Method,
     headers: HeaderMap,
     Query(query): Query<ItemQuery>,
-) -> Result<Json<Vec<String>>, AdminError> {
+    body: Bytes,
+) -> Result<Response, AdminError> {
     authorize_admin(&state, &headers).await?;
-    if method != Method::GET {
+    if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
+    }
+    if method == Method::POST {
+        let input: AdminCreateItemGroupRequest = parse_json(&body)?;
+        return match state
+            .admin
+            .create_item_group(&input.name, &input.parent, input.is_group)
+            .await
+        {
+            Ok(group) => Ok(json_response(group)),
+            Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
+            Err(_) => Err(server_error("admin item group create failed")),
+        };
     }
     state
         .admin
         .item_groups(query.q.as_deref().unwrap_or(""), 100)
         .await
-        .map(Json)
+        .map(json_response)
         .map_err(|_| server_error("admin item groups failed"))
 }
 

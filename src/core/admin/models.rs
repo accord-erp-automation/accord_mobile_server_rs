@@ -114,6 +114,21 @@ pub struct AdminCreateItemRequest {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminCreateItemGroupRequest {
+    pub name: String,
+    pub parent: String,
+    pub is_group: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminItemGroup {
+    pub name: String,
+    pub item_group_name: String,
+    pub parent_item_group: String,
+    pub is_group: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminBulkMoveItemsRequest {
     pub item_codes: Vec<String>,
     pub item_group: String,

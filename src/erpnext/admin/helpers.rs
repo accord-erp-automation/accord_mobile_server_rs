@@ -44,6 +44,17 @@ pub(super) struct ItemRow {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ItemGroupRow {
+    pub(super) name: String,
+    #[serde(default)]
+    pub(super) item_group_name: String,
+    #[serde(default)]
+    pub(super) parent_item_group: String,
+    #[serde(default)]
+    pub(super) is_group: i32,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ItemSupplierRow {
     pub(super) parent: String,
 }
@@ -139,6 +150,15 @@ pub(super) fn supplier_item(row: ItemRow, warehouse: &str) -> SupplierItem {
         uom: row.stock_uom.trim().to_string(),
         warehouse: warehouse.trim().to_string(),
         item_group: row.item_group.trim().to_string(),
+    }
+}
+
+pub(super) fn item_group(row: ItemGroupRow) -> AdminItemGroup {
+    AdminItemGroup {
+        name: row.name.trim().to_string(),
+        item_group_name: blank_default(&row.item_group_name, &row.name),
+        parent_item_group: row.parent_item_group.trim().to_string(),
+        is_group: row.is_group != 0,
     }
 }
 

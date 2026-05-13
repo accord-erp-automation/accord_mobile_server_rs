@@ -1,5 +1,6 @@
 use super::helpers::*;
 use super::*;
+use crate::core::admin::models::AdminItemGroup;
 
 impl AdminService {
     pub async fn create_supplier(
@@ -261,6 +262,28 @@ impl AdminService {
     ) -> Result<SupplierItem, AdminPortError> {
         self.write_port()?
             .create_item(code.trim(), name.trim(), uom.trim(), item_group.trim())
+            .await
+    }
+
+    pub async fn create_item_group(
+        &self,
+        name: &str,
+        parent: &str,
+        is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "item group name is required".to_string(),
+            ));
+        }
+        let parent = if parent.trim().is_empty() {
+            "All Item Groups"
+        } else {
+            parent.trim()
+        };
+        self.write_port()?
+            .create_item_group(name, parent, is_group)
             .await
     }
 

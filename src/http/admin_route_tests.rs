@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
-use crate::core::admin::models::{AdminDirectoryEntry, AdminState};
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState};
 use crate::core::admin::ports::{
     AdminCredentialPort, AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
 };
@@ -65,7 +65,7 @@ async fn admin_method_checks_happen_after_auth_like_go() {
         ("GET", "/v1/mobile/admin/customers/remove"),
         ("PATCH", "/v1/mobile/admin/items"),
         ("GET", "/v1/mobile/admin/items/bulk-move-group"),
-        ("POST", "/v1/mobile/admin/item-groups"),
+        ("PATCH", "/v1/mobile/admin/item-groups"),
         ("POST", "/v1/mobile/admin/activity"),
         ("GET", "/v1/mobile/admin/werka/code/regenerate"),
     ];
@@ -372,6 +372,43 @@ async fn admin_customers_and_items_read_like_go() {
         .expect("response");
     assert_eq!(groups.status(), StatusCode::OK);
     assert_eq!(json_body(groups).await[0], "All Item Groups");
+}
+
+#[tokio::test]
+async fn admin_item_group_create_returns_erpnext_shape() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let group = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"Kley","parent":"Kraska","is_group":false}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(group.status(), StatusCode::OK);
+    let value = json_body(group).await;
+    assert_eq!(value["name"], "Kley");
+    assert_eq!(value["item_group_name"], "Kley");
+    assert_eq!(value["parent_item_group"], "Kraska");
+    assert_eq!(value["is_group"], false);
+
+    let invalid = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"","parent":"All Item Groups","is_group":true}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid).await["error"],
+        "item group name is required"
+    );
 }
 
 #[tokio::test]
@@ -1199,6 +1236,20 @@ impl AdminWritePort for FakeAdminReadPort {
         })
     }
 
+    async fn create_item_group(
+        &self,
+        name: &str,
+        parent: &str,
+        is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        Ok(AdminItemGroup {
+            name: name.trim().to_string(),
+            item_group_name: name.trim().to_string(),
+            parent_item_group: parent.trim().to_string(),
+            is_group,
+        })
+    }
+
     async fn update_item_group(
         &self,
         _item_code: &str,
@@ -1289,6 +1340,17 @@ impl AdminWritePort for MissingSupplierWritePort {
     ) -> Result<SupplierItem, AdminPortError> {
         FakeAdminReadPort
             .create_item(code, name, uom, item_group)
+            .await
+    }
+
+    async fn create_item_group(
+        &self,
+        name: &str,
+        parent: &str,
+        is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        FakeAdminReadPort
+            .create_item_group(name, parent, is_group)
             .await
     }
 
@@ -1388,6 +1450,17 @@ impl AdminWritePort for CountingSupplierWritePort {
     ) -> Result<SupplierItem, AdminPortError> {
         FakeAdminReadPort
             .create_item(code, name, uom, item_group)
+            .await
+    }
+
+    async fn create_item_group(
+        &self,
+        name: &str,
+        parent: &str,
+        is_group: bool,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        FakeAdminReadPort
+            .create_item_group(name, parent, is_group)
             .await
     }
 
