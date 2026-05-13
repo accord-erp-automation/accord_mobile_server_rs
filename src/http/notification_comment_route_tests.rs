@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -9,6 +10,8 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::push::ports::{PushSendError, PushSenderPort};
+use crate::core::push::service::PushService;
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::ports::{
     DeliveryNoteNotificationDraft, NotificationDetailWriter, PurchaseReceiptComment,
@@ -150,6 +153,38 @@ async fn notification_comment_supplier_ack_updates_remarks_best_effort_like_go()
         writer.remarks.lock().expect("remarks")[0],
         "Old note\nAccord Supplier Tasdiq: tasdiqlayman, qaytdi"
     );
+}
+
+#[tokio::test]
+async fn notification_comment_supplier_ack_sends_werka_push_like_go() {
+    let sender = Arc::new(RecordingPushSender::default());
+    let mut state = test_state();
+    let writer = Arc::new(RecordingNotificationWriter::default());
+    state.werka = WerkaService::new().with_notification_detail_writer(writer);
+    state.push = PushService::new(state.push.store_for_tests()).with_sender(sender.clone());
+    let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
+
+    let response = build_router(state)
+        .oneshot(post_request(
+            &token,
+            "/v1/mobile/notifications/comments?receipt_id=PR-001",
+            r#"{"message":"tasdiqlayman"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = sender.calls.lock().expect("calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].key, "werka:werka");
+    assert_eq!(calls[0].title, "Supplier tasdiqladi");
+    assert_eq!(
+        calls[0].body,
+        "Supplier mahsulotni qaytarganingizni tasdiqladi"
+    );
+    assert_eq!(calls[0].data["event_type"], "supplier_ack");
+    assert_eq!(calls[0].data["target_role"], "werka");
+    assert_eq!(calls[0].data["target_ref"], "werka");
 }
 
 #[tokio::test]
@@ -384,6 +419,38 @@ impl NotificationDetailWriter for RecordingNotificationWriter {
             .lock()
             .expect("comments")
             .push(content.to_string());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RecordingPushSender {
+    calls: Mutex<Vec<PushCall>>,
+}
+
+#[derive(Debug)]
+struct PushCall {
+    key: String,
+    title: String,
+    body: String,
+    data: HashMap<String, String>,
+}
+
+#[async_trait]
+impl PushSenderPort for RecordingPushSender {
+    async fn send_to_key(
+        &self,
+        key: &str,
+        title: &str,
+        body: &str,
+        data: HashMap<String, String>,
+    ) -> Result<(), PushSendError> {
+        self.calls.lock().expect("calls").push(PushCall {
+            key: key.to_string(),
+            title: title.to_string(),
+            body: body.to_string(),
+            data,
+        });
         Ok(())
     }
 }

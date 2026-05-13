@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -9,6 +10,8 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::push::ports::{PushSendError, PushSenderPort};
+use crate::core::push::service::PushService;
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::ports::{
     PurchaseReceiptSubmissionResult, WerkaConfirmWriter, WerkaPortError,
@@ -105,6 +108,33 @@ async fn werka_confirm_returns_dispatch_record_and_passes_decision_fields() {
             return_comment: "Qop yorilgan".to_string(),
         }
     );
+}
+
+#[tokio::test]
+async fn werka_confirm_sends_supplier_push_like_go() {
+    let sender = Arc::new(RecordingPushSender::default());
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_confirm_writer(Arc::new(FakeConfirmWriter::default()));
+    state.push = PushService::new(state.push.store_for_tests()).with_sender(sender.clone());
+    let token = werka_session(&state).await;
+
+    let response = build_router(state)
+        .oneshot(post_request(
+            &token,
+            r#"{"receipt_id":"PR-001","accepted_qty":7,"returned_qty":3,"return_reason":"Brak","return_comment":"Qop yorilgan"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = sender.calls.lock().expect("calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].key, "supplier:");
+    assert_eq!(calls[0].title, "ITEM-001");
+    assert_eq!(calls[0].body, "Status: partial");
+    assert_eq!(calls[0].data["target_role"], "supplier");
+    assert_eq!(calls[0].data["target_ref"], "");
+    assert_eq!(calls[0].data["sent_qty"], "10.0000");
 }
 
 fn test_state() -> AppState {
@@ -219,5 +249,37 @@ impl WerkaConfirmWriter for FakeConfirmWriter {
             supplier_delivery_note: "TG:+998901111111:20260116100000:10.0000".to_string(),
             note: "Qaytarildi".to_string(),
         })
+    }
+}
+
+#[derive(Default)]
+struct RecordingPushSender {
+    calls: Mutex<Vec<PushCall>>,
+}
+
+#[derive(Debug)]
+struct PushCall {
+    key: String,
+    title: String,
+    body: String,
+    data: HashMap<String, String>,
+}
+
+#[async_trait]
+impl PushSenderPort for RecordingPushSender {
+    async fn send_to_key(
+        &self,
+        key: &str,
+        title: &str,
+        body: &str,
+        data: HashMap<String, String>,
+    ) -> Result<(), PushSendError> {
+        self.calls.lock().expect("calls").push(PushCall {
+            key: key.to_string(),
+            title: title.to_string(),
+            body: body.to_string(),
+            data,
+        });
+        Ok(())
     }
 }

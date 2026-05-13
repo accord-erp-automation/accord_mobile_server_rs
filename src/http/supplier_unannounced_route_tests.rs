@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -9,6 +10,8 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::push::ports::{PushSendError, PushSenderPort};
+use crate::core::push::service::PushService;
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::ports::{
     PurchaseReceiptComment, PurchaseReceiptDraft, PurchaseReceiptSubmissionResult,
@@ -130,6 +133,30 @@ async fn supplier_unannounced_respond_approves_pending_receipt() {
     assert!(value["record"].get("event_type").is_none());
     assert!(value["record"].get("highlight").is_none());
     assert!(value["record"].get("note").is_none());
+}
+
+#[tokio::test]
+async fn supplier_unannounced_respond_sends_werka_push_like_go() {
+    let sender = Arc::new(RecordingPushSender::default());
+    let mut state = test_state();
+    state.werka =
+        WerkaService::new().with_supplier_unannounced_writer(Arc::new(FakeSupplierWriter::new()));
+    state.push = PushService::new(state.push.store_for_tests()).with_sender(sender.clone());
+    let token = supplier_session(&state).await;
+
+    let response = build_router(state)
+        .oneshot(create_request(&token, approve_body()))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = sender.calls.lock().expect("calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].key, "werka:werka");
+    assert_eq!(calls[0].title, "Supplier javob berdi");
+    assert_eq!(calls[0].data["target_role"], "werka");
+    assert_eq!(calls[0].data["target_ref"], "werka");
+    assert_eq!(calls[0].data["id"], "PR-001");
 }
 
 #[tokio::test]
@@ -307,5 +334,35 @@ impl SupplierUnannouncedWriter for FakeSupplierWriter {
         assert_eq!(name, "PR-001");
         assert_eq!(limit, 100);
         Ok(self.comments.lock().expect("comments").clone())
+    }
+}
+
+#[derive(Default)]
+struct RecordingPushSender {
+    calls: Mutex<Vec<PushCall>>,
+}
+
+#[derive(Debug)]
+struct PushCall {
+    key: String,
+    title: String,
+    data: HashMap<String, String>,
+}
+
+#[async_trait]
+impl PushSenderPort for RecordingPushSender {
+    async fn send_to_key(
+        &self,
+        key: &str,
+        title: &str,
+        _body: &str,
+        data: HashMap<String, String>,
+    ) -> Result<(), PushSendError> {
+        self.calls.lock().expect("calls").push(PushCall {
+            key: key.to_string(),
+            title: title.to_string(),
+            data,
+        });
+        Ok(())
     }
 }

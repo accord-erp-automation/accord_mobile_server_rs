@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
@@ -9,6 +10,8 @@ use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::push::ports::{PushSendError, PushSenderPort};
+use crate::core::push::service::PushService;
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::ports::{
     CreatePurchaseReceiptInput, PurchaseReceiptDraft, WerkaPortError, WerkaSupplierRecord,
@@ -120,6 +123,33 @@ async fn unannounced_create_returns_dispatch_record_and_marks_pending() {
     );
 }
 
+#[tokio::test]
+async fn unannounced_create_sends_supplier_push_like_go() {
+    let sender = Arc::new(RecordingPushSender::default());
+    let mut state = test_state();
+    state.werka = WerkaService::new().with_unannounced_writer(Arc::new(FakeUnannouncedWriter));
+    state.push = PushService::new(state.push.store_for_tests()).with_sender(sender.clone());
+    let token = werka_session(&state).await;
+
+    let response = build_router(state)
+        .oneshot(create_request(&token, request_body()))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = sender.calls.lock().expect("calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].key, "supplier:SUP-001");
+    assert_eq!(
+        calls[0].title,
+        "Werka siz qayd etmagan mahsulotni qabul qildi"
+    );
+    assert_eq!(calls[0].body, "Tasdiqlash kutilmoqda");
+    assert_eq!(calls[0].data["target_role"], "supplier");
+    assert_eq!(calls[0].data["target_ref"], "SUP-001");
+    assert_eq!(calls[0].data["event_type"], "werka_unannounced_pending");
+}
+
 fn request_body() -> &'static str {
     r#"{"supplier_ref":"SUP-001","item_code":"ITEM-001","qty":2}"#
 }
@@ -225,6 +255,38 @@ impl WerkaUnannouncedWriter for FakeUnannouncedWriter {
     ) -> Result<(), WerkaPortError> {
         assert_eq!(name, "PR-001");
         assert!(content.contains("Aytilmagan mol sifatida qayd qilindi."));
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RecordingPushSender {
+    calls: Mutex<Vec<PushCall>>,
+}
+
+#[derive(Debug)]
+struct PushCall {
+    key: String,
+    title: String,
+    body: String,
+    data: HashMap<String, String>,
+}
+
+#[async_trait]
+impl PushSenderPort for RecordingPushSender {
+    async fn send_to_key(
+        &self,
+        key: &str,
+        title: &str,
+        body: &str,
+        data: HashMap<String, String>,
+    ) -> Result<(), PushSendError> {
+        self.calls.lock().expect("calls").push(PushCall {
+            key: key.to_string(),
+            title: title.to_string(),
+            body: body.to_string(),
+            data,
+        });
         Ok(())
     }
 }
