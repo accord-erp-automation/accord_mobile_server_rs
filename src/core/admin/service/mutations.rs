@@ -287,6 +287,37 @@ impl AdminService {
             .await
     }
 
+    pub async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AdminPortError::InvalidInput(
+                "item group name is required".to_string(),
+            ));
+        }
+        if name == "All Item Groups" {
+            return Err(AdminPortError::InvalidInput(
+                "root item group cannot be moved".to_string(),
+            ));
+        }
+        let parent = if parent.trim().is_empty() {
+            "All Item Groups"
+        } else {
+            parent.trim()
+        };
+        if name == parent {
+            return Err(AdminPortError::InvalidInput(
+                "item group cannot be its own parent".to_string(),
+            ));
+        }
+        self.write_port()?
+            .move_item_group_parent(name, parent)
+            .await
+    }
+
     pub async fn move_items_to_group(
         &self,
         item_codes: Vec<String>,

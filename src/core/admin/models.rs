@@ -121,6 +121,12 @@ pub struct AdminCreateItemGroupRequest {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminMoveItemGroupRequest {
+    pub name: String,
+    pub parent: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminItemGroup {
     pub name: String,
     pub item_group_name: String,

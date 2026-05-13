@@ -412,6 +412,58 @@ async fn admin_item_group_create_returns_erpnext_shape() {
 }
 
 #[tokio::test]
+async fn admin_item_group_parent_move_returns_erpnext_shape() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let moved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"Xomashyo","parent":"All Item Groups"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(moved.status(), StatusCode::OK);
+    let value = json_body(moved).await;
+    assert_eq!(value["name"], "Xomashyo");
+    assert_eq!(value["item_group_name"], "Xomashyo");
+    assert_eq!(value["parent_item_group"], "All Item Groups");
+    assert_eq!(value["is_group"], true);
+
+    let invalid_root = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"All Item Groups","parent":"Products"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_root.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_root).await["error"],
+        "root item group cannot be moved"
+    );
+
+    let invalid_cycle = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/item-groups",
+            &token,
+            r#"{"name":"Xomashyo","parent":"Xomashyo"}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(invalid_cycle.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(invalid_cycle).await["error"],
+        "item group cannot be its own parent"
+    );
+}
+
+#[tokio::test]
 async fn admin_customer_detail_errors_are_500_like_go() {
     let mut state = test_state();
     let erp = Arc::new(CustomerItemsFailReadPort);
@@ -1250,6 +1302,19 @@ impl AdminWritePort for FakeAdminReadPort {
         })
     }
 
+    async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        Ok(AdminItemGroup {
+            name: name.trim().to_string(),
+            item_group_name: name.trim().to_string(),
+            parent_item_group: parent.trim().to_string(),
+            is_group: true,
+        })
+    }
+
     async fn update_item_group(
         &self,
         _item_code: &str,
@@ -1352,6 +1417,14 @@ impl AdminWritePort for MissingSupplierWritePort {
         FakeAdminReadPort
             .create_item_group(name, parent, is_group)
             .await
+    }
+
+    async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        FakeAdminReadPort.move_item_group_parent(name, parent).await
     }
 
     async fn update_item_group(
@@ -1462,6 +1535,14 @@ impl AdminWritePort for CountingSupplierWritePort {
         FakeAdminReadPort
             .create_item_group(name, parent, is_group)
             .await
+    }
+
+    async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        FakeAdminReadPort.move_item_group_parent(name, parent).await
     }
 
     async fn update_item_group(

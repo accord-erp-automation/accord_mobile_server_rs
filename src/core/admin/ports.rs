@@ -143,6 +143,12 @@ pub trait AdminWritePort: Send + Sync {
         is_group: bool,
     ) -> Result<AdminItemGroup, AdminPortError>;
 
+    async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError>;
+
     async fn update_item_group(
         &self,
         item_code: &str,

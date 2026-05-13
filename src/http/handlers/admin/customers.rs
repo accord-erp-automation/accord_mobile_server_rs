@@ -113,7 +113,7 @@ pub async fn item_groups(
     body: Bytes,
 ) -> Result<Response, AdminError> {
     authorize_admin(&state, &headers).await?;
-    if !matches!(method, Method::GET | Method::POST) {
+    if !matches!(method, Method::GET | Method::POST | Method::PUT) {
         return Err(method_not_allowed());
     }
     if method == Method::POST {
@@ -126,6 +126,18 @@ pub async fn item_groups(
             Ok(group) => Ok(json_response(group)),
             Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
             Err(_) => Err(server_error("admin item group create failed")),
+        };
+    }
+    if method == Method::PUT {
+        let input: AdminMoveItemGroupRequest = parse_json(&body)?;
+        return match state
+            .admin
+            .move_item_group_parent(&input.name, &input.parent)
+            .await
+        {
+            Ok(group) => Ok(json_response(group)),
+            Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
+            Err(_) => Err(server_error("admin item group move failed")),
         };
     }
     state

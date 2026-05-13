@@ -273,6 +273,29 @@ impl AdminWritePort for ErpnextClient {
         Ok(item_group(response.data))
     }
 
+    async fn move_item_group_parent(
+        &self,
+        name: &str,
+        parent: &str,
+    ) -> Result<AdminItemGroup, AdminPortError> {
+        let parent = if parent.trim().is_empty() {
+            "All Item Groups"
+        } else {
+            parent.trim()
+        };
+        let response: GetResponse<ItemGroupRow> = self
+            .admin_json_request(
+                reqwest::Method::PUT,
+                &format!(
+                    "/api/resource/Item Group/{}",
+                    urlencoding::encode(name.trim())
+                ),
+                serde_json::json!({"parent_item_group": parent}),
+            )
+            .await?;
+        Ok(item_group(response.data))
+    }
+
     async fn update_item_group(
         &self,
         item_code: &str,
