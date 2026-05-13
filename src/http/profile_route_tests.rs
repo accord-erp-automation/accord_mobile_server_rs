@@ -251,6 +251,49 @@ async fn avatar_view_forbids_non_supplier() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn avatar_view_accepts_token_query_with_any_method_like_go() {
+    let mut state = test_state();
+    state.profiles =
+        ProfileService::new("http://erp.test".to_string()).with_erp_lookup(Arc::new(FakeLookup));
+    let token = state
+        .sessions
+        .create(Principal {
+            role: PrincipalRole::Supplier,
+            display_name: "Supplier".to_string(),
+            legal_name: "Supplier".to_string(),
+            ref_: "SUP-001".to_string(),
+            phone: "+998901234567".to_string(),
+            avatar_url: "http://erp.test/files/uploaded.png".to_string(),
+        })
+        .await
+        .expect("session");
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/mobile/profile/avatar/view?token={token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png")
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(&bytes[..], b"png");
+}
+
 async fn supplier_session(state: &AppState) -> String {
     state
         .sessions

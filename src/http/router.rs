@@ -35,7 +35,7 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/mobile/notifications/comments",
             any(notifications::comment),
         )
-        .route("/v1/mobile/profile/avatar/view", get(profile::avatar_view))
+        .route("/v1/mobile/profile/avatar/view", any(profile::avatar_view))
         .route(
             "/v1/mobile/supplier/dispatch",
             any(supplier::create_dispatch),

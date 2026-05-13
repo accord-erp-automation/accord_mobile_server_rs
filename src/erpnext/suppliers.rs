@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use reqwest::multipart;
 use serde::Deserialize;
+use std::path::Path;
 
 use crate::core::auth::ports::{AuthPortError, SupplierLookup, SupplierRecord};
 use crate::core::profile::ports::{
@@ -140,18 +141,14 @@ impl ProfileLookup for ErpnextClient {
         if supplier_id.is_empty() || content.is_empty() {
             return Err(ProfilePortError::LookupFailed);
         }
-        let filename = if filename.trim().is_empty() {
-            "avatar.png"
-        } else {
-            filename.trim()
-        };
+        let filename = upload_filename(filename);
         let content_type = if content_type.trim().is_empty() {
             "image/png"
         } else {
             content_type.trim()
         };
         let file_part = multipart::Part::bytes(content)
-            .file_name(filename.to_string())
+            .file_name(filename)
             .mime_str(content_type)
             .map_err(|_| ProfilePortError::LookupFailed)?;
         let form = multipart::Form::new()
@@ -192,6 +189,19 @@ impl ProfileLookup for ErpnextClient {
             .map_err(|_| ProfilePortError::LookupFailed)?;
         Ok(file_url)
     }
+}
+
+fn upload_filename(filename: &str) -> String {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() {
+        return "avatar.png".to_string();
+    }
+    Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("avatar.png")
+        .to_string()
 }
 
 fn normalize_limit(limit: usize) -> usize {
@@ -284,7 +294,9 @@ fn extract_phone_from_details(details: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SupplierListResponse, SupplierListRow, suppliers_from_list_response};
+    use super::{
+        SupplierListResponse, SupplierListRow, suppliers_from_list_response, upload_filename,
+    };
 
     #[test]
     fn maps_supplier_name_and_details_phone_like_go() {
@@ -300,5 +312,12 @@ mod tests {
         assert_eq!(suppliers[0].id, "SUP-001");
         assert_eq!(suppliers[0].name, "SUP-001");
         assert_eq!(suppliers[0].phone, "+998901234567");
+    }
+
+    #[test]
+    fn upload_filename_uses_path_base_like_go() {
+        assert_eq!(upload_filename(""), "avatar.png");
+        assert_eq!(upload_filename(" avatar.png "), "avatar.png");
+        assert_eq!(upload_filename("/tmp/nested/avatar.png"), "avatar.png");
     }
 }
