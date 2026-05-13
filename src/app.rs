@@ -95,7 +95,9 @@ impl AppState {
                     "direct DB read enabled for Werka home"
                 );
                 let direct_reader = Arc::new(DirectDbReader::new(db_config));
-                admin = admin.with_credential_port(direct_reader.clone());
+                admin = admin
+                    .with_read_port(direct_reader.clone())
+                    .with_credential_port(direct_reader.clone());
                 werka = werka
                     .with_lookup(direct_reader.clone())
                     .with_customer_issue_source_lookup(direct_reader.clone())

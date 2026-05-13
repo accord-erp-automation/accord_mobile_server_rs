@@ -29,7 +29,7 @@ use crate::erpdb::werka_suppliers::read_werka_suppliers;
 pub struct DirectDbReader {
     pub(crate) pool: MySqlPool,
     pub(crate) encryption_key: String,
-    default_warehouse: String,
+    pub(crate) default_warehouse: String,
 }
 
 impl DirectDbReader {

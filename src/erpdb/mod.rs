@@ -1,3 +1,4 @@
+mod admin;
 mod credentials;
 mod customer_issue;
 mod notification_detail;
