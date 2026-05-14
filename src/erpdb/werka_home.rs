@@ -1,4 +1,6 @@
-use crate::core::werka::models::{DispatchRecord, WerkaHomeData, WerkaHomeSummary};
+use crate::core::werka::models::DispatchRecord;
+#[cfg(test)]
+use crate::core::werka::models::{WerkaHomeData, WerkaHomeSummary};
 
 const DELIVERY_FLOW_STATE_SUBMITTED: i32 = 1;
 const CUSTOMER_STATE_REJECTED: i32 = 2;
@@ -43,6 +45,7 @@ pub(crate) struct DeliveryNoteSummaryRow {
     pub accord_customer_state: i32,
 }
 
+#[cfg(test)]
 pub(crate) fn build_werka_home(
     receipts: &[PurchaseReceiptSummaryRow],
     delivery_notes: &[DeliveryNoteSummaryRow],

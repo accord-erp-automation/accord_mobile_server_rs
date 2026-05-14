@@ -1,11 +1,16 @@
+#[cfg(test)]
 use std::collections::BTreeMap;
 
-use crate::core::werka::models::{DispatchRecord, WerkaStatusBreakdownEntry};
+use crate::core::werka::models::DispatchRecord;
+#[cfg(test)]
+use crate::core::werka::models::WerkaStatusBreakdownEntry;
+#[cfg(test)]
 use crate::erpdb::werka_home::{
     DeliveryNoteSummaryRow, PurchaseReceiptSummaryRow, delivery_note_to_record,
     purchase_receipt_to_record,
 };
 
+#[cfg(test)]
 pub(crate) fn build_werka_status_breakdown(
     receipts: &[PurchaseReceiptSummaryRow],
     delivery_notes: &[DeliveryNoteSummaryRow],
@@ -32,6 +37,7 @@ pub(crate) fn build_werka_status_breakdown(
     result
 }
 
+#[cfg(test)]
 fn add_if_matches(
     grouped: &mut BTreeMap<String, WerkaStatusBreakdownEntry>,
     record: DispatchRecord,
@@ -73,6 +79,7 @@ pub(crate) fn matches_werka_breakdown(record: &DispatchRecord, kind: &str) -> bo
     }
 }
 
+#[cfg(test)]
 fn non_empty(primary: &str, fallback: &str) -> String {
     if primary.is_empty() {
         fallback.to_string()

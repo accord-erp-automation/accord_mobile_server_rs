@@ -13,8 +13,10 @@ mod werka_home;
 mod werka_item_search;
 mod werka_items;
 mod werka_lookup;
+#[cfg(test)]
 mod werka_pending;
 mod werka_status_breakdown;
 mod werka_status_details;
+#[cfg(test)]
 mod werka_summary;
 mod werka_suppliers;
