@@ -84,7 +84,8 @@ pub async fn items(
     match method {
         Method::GET => state
             .admin
-            .items_page(
+            .items_page_by_group(
+                query.group.as_deref().unwrap_or(""),
                 query.q.as_deref().unwrap_or(""),
                 positive_int(query.limit.as_deref(), 50),
                 optional_offset(query.offset.as_deref()),

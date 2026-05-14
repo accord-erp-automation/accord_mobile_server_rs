@@ -165,13 +165,16 @@ impl AdminService {
         })
     }
 
-    pub async fn items_page(
+    pub async fn items_page_by_group(
         &self,
+        group: &str,
         query: &str,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError> {
-        self.read_port()?.items_page(query, limit, offset).await
+        self.read_port()?
+            .items_page_by_group(group, query, limit, offset)
+            .await
     }
 
     pub async fn item_groups(

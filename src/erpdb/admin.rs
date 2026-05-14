@@ -95,6 +95,34 @@ impl AdminReadPort for DirectDbReader {
             .collect())
     }
 
+    async fn items_page_by_group(
+        &self,
+        group: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let group = group.trim();
+        if group.is_empty() {
+            return self.items_page(query, limit, offset).await;
+        }
+        let like = like_pattern(query);
+        let rows = query_as::<_, AdminItemRow>(ADMIN_ITEMS_BY_GROUP_PAGE_SQL)
+            .bind(group)
+            .bind(query.trim())
+            .bind(&like)
+            .bind(&like)
+            .bind(clamp_limit(limit, 50, 500) as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_lookup_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| row.into_item(&self.default_warehouse))
+            .collect())
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],
@@ -340,6 +368,21 @@ const ADMIN_ITEMS_PAGE_SQL: &str = r#"
     FROM tabItem i
     WHERE i.disabled = 0
       AND i.is_stock_item = 1
+      AND (? = '' OR i.name LIKE ? ESCAPE '\\' OR i.item_name LIKE ? ESCAPE '\\')
+    ORDER BY i.item_name ASC, i.name ASC
+    LIMIT ? OFFSET ?
+"#;
+
+const ADMIN_ITEMS_BY_GROUP_PAGE_SQL: &str = r#"
+    SELECT
+        i.name AS item_code,
+        COALESCE(NULLIF(i.item_name, ''), i.name) AS item_name,
+        COALESCE(i.stock_uom, '') AS stock_uom,
+        COALESCE(i.item_group, '') AS item_group
+    FROM tabItem i
+    WHERE i.disabled = 0
+      AND i.is_stock_item = 1
+      AND i.item_group = ?
       AND (? = '' OR i.name LIKE ? ESCAPE '\\' OR i.item_name LIKE ? ESCAPE '\\')
     ORDER BY i.item_name ASC, i.name ASC
     LIMIT ? OFFSET ?

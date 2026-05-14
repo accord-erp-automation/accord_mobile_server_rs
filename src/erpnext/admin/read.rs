@@ -133,6 +133,50 @@ impl AdminReadPort for ErpnextClient {
             .collect())
     }
 
+    async fn items_page_by_group(
+        &self,
+        group: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let group = group.trim();
+        if group.is_empty() {
+            return self.items_page(query, limit, offset).await;
+        }
+        let filters = serde_json::json!([
+            ["disabled", "=", 0],
+            ["is_stock_item", "=", 1],
+            ["item_group", "=", group],
+        ]);
+        let mut params = vec![
+            (
+                "fields",
+                r#"["name","item_name","stock_uom","item_group"]"#.to_string(),
+            ),
+            ("filters", filters.to_string()),
+            (
+                "limit_page_length",
+                normalize_limit(limit, 20, 500).to_string(),
+            ),
+            ("order_by", "item_name asc, name asc".to_string()),
+        ];
+        if offset > 0 {
+            params.push(("limit_start", offset.to_string()));
+        }
+        if !query.trim().is_empty() {
+            params.push(("or_filters", item_or_filters(query)));
+        }
+        let payload: ListResponse<ItemRow> =
+            self.admin_get_json("/api/resource/Item", &params).await?;
+        let warehouse = self.default_warehouse();
+        Ok(payload
+            .data
+            .into_iter()
+            .map(|row| supplier_item(row, &warehouse))
+            .collect())
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

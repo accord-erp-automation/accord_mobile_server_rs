@@ -367,6 +367,17 @@ async fn admin_customers_and_items_read_like_go() {
     assert_eq!(items.status(), StatusCode::OK);
     assert_eq!(json_body(items).await[0]["item_group"], "Products");
 
+    let group_items = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/items?group=Products&limit=5",
+            &token,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(group_items.status(), StatusCode::OK);
+    assert_eq!(json_body(group_items).await[0]["code"], "ITEM-001");
+
     let groups = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/item-groups", &token))
         .await

@@ -33,6 +33,39 @@ pub trait AdminReadPort: Send + Sync {
         offset: usize,
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
+    async fn items_page_by_group(
+        &self,
+        group: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        let group = group.trim();
+        if group.is_empty() {
+            return self.items_page(query, limit, offset).await;
+        }
+        let mut result = Vec::new();
+        let page_size = limit.clamp(20, 500);
+        let mut scan_offset = offset;
+        while result.len() < limit {
+            let page = self.items_page(query, page_size, scan_offset).await?;
+            if page.is_empty() {
+                break;
+            }
+            let page_len = page.len();
+            result.extend(
+                page.into_iter()
+                    .filter(|item| item.item_group.trim() == group)
+                    .take(limit - result.len()),
+            );
+            if page_len < page_size {
+                break;
+            }
+            scan_offset += page_len;
+        }
+        Ok(result)
+    }
+
     async fn items_by_codes(
         &self,
         item_codes: &[String],

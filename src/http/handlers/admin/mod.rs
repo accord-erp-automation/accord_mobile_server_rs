@@ -209,6 +209,7 @@ pub struct RefItemQuery {
 #[derive(Debug, Deserialize)]
 pub struct ItemQuery {
     pub q: Option<String>,
+    pub group: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
 }
