@@ -19,9 +19,14 @@ pub(crate) async fn read_werka_archive(
     to: Option<Date>,
 ) -> Result<WerkaArchiveResponse, sqlx::Error> {
     let normalized_kind = normalize_archive_kind(kind);
-    let receipts = if normalized_kind == "received" || normalized_kind == "returned" {
-        let from_date = format_archive_date(from);
-        let to_date = format_archive_date(to);
+    let from_date = format_archive_date(from);
+    let to_date = format_archive_date(to);
+    let (from_date_time, to_exclusive_date_time) = format_archive_date_time_range(from, to);
+
+    let receipts = async {
+        if normalized_kind != "received" && normalized_kind != "returned" {
+            return Ok(Vec::new());
+        }
         query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_FILTERED_SQL)
             .bind("")
             .bind("")
@@ -30,13 +35,12 @@ pub(crate) async fn read_werka_archive(
             .bind(&to_date)
             .bind(&to_date)
             .fetch_all(pool)
-            .await?
-    } else {
-        Vec::new()
+            .await
     };
-
-    let delivery_notes = if normalized_kind == "sent" || normalized_kind == "returned" {
-        let (from_date_time, to_exclusive_date_time) = format_archive_date_time_range(from, to);
+    let delivery_notes = async {
+        if normalized_kind != "sent" && normalized_kind != "returned" {
+            return Ok(Vec::new());
+        }
         query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_FILTERED_SQL)
             .bind("")
             .bind("")
@@ -45,10 +49,9 @@ pub(crate) async fn read_werka_archive(
             .bind(&to_exclusive_date_time)
             .bind(&to_exclusive_date_time)
             .fetch_all(pool)
-            .await?
-    } else {
-        Vec::new()
+            .await
     };
+    let (receipts, delivery_notes) = tokio::try_join!(receipts, delivery_notes)?;
 
     Ok(build_werka_archive(
         &receipts,

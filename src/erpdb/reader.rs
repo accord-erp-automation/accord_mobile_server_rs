@@ -80,16 +80,14 @@ impl DirectDbReader {
         const RECENT_LIMIT: usize = 120;
         let receipts = query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_LIMIT_SQL)
             .bind(RECENT_LIMIT as i64)
-            .fetch_all(&self.pool)
-            .await?;
+            .fetch_all(&self.pool);
         let acks = query_as::<_, SupplierAckRow>(SUPPLIER_ACK_ROWS_LIMIT_SQL)
             .bind(RECENT_LIMIT as i64)
-            .fetch_all(&self.pool)
-            .await?;
+            .fetch_all(&self.pool);
         let delivery_notes = query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_LIMIT_SQL)
             .bind(RECENT_LIMIT as i64)
-            .fetch_all(&self.pool)
-            .await?;
+            .fetch_all(&self.pool);
+        let (receipts, acks, delivery_notes) = tokio::try_join!(receipts, acks, delivery_notes)?;
 
         Ok(build_werka_history(
             &receipts,
@@ -123,11 +121,10 @@ impl DirectDbReader {
         supplier_ref: &str,
     ) -> Result<Vec<DispatchRecord>, sqlx::Error> {
         let receipts = query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_SQL)
-            .fetch_all(&self.pool)
-            .await?;
-        let delivery_notes = query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_SQL)
-            .fetch_all(&self.pool)
-            .await?;
+            .fetch_all(&self.pool);
+        let delivery_notes =
+            query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_SQL).fetch_all(&self.pool);
+        let (receipts, delivery_notes) = tokio::try_join!(receipts, delivery_notes)?;
 
         Ok(build_werka_status_details(
             &receipts,
