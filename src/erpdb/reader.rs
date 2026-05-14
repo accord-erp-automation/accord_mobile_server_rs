@@ -64,12 +64,12 @@ impl DirectDbReader {
     pub(crate) async fn pending(&self, limit: usize) -> Result<Vec<DispatchRecord>, sqlx::Error> {
         let limit = clamp_limit(limit, 1000);
         let rows = if limit > 0 {
-            query_as::<_, WerkaPendingPushdownRow>(WERKA_PENDING_PUSHDOWN_LIMIT_SQL)
+            query_as::<_, WerkaDispatchRecordPushdownRow>(WERKA_PENDING_PUSHDOWN_LIMIT_SQL)
                 .bind(limit as i64)
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            query_as::<_, WerkaPendingPushdownRow>(WERKA_PENDING_PUSHDOWN_SQL)
+            query_as::<_, WerkaDispatchRecordPushdownRow>(WERKA_PENDING_PUSHDOWN_SQL)
                 .fetch_all(&self.pool)
                 .await?
         };
@@ -120,18 +120,31 @@ impl DirectDbReader {
         kind: &str,
         supplier_ref: &str,
     ) -> Result<Vec<DispatchRecord>, sqlx::Error> {
-        let receipts = query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_SQL)
-            .fetch_all(&self.pool);
-        let delivery_notes =
-            query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_SQL).fetch_all(&self.pool);
-        let (receipts, delivery_notes) = tokio::try_join!(receipts, delivery_notes)?;
-
-        Ok(build_werka_status_details(
-            &receipts,
-            &delivery_notes,
-            kind,
-            supplier_ref,
-        ))
+        let supplier_ref = supplier_ref.trim();
+        let sql = match kind.trim() {
+            "pending" => {
+                let receipts = query_as::<_, PurchaseReceiptSummaryRow>(PURCHASE_RECEIPT_ROWS_SQL)
+                    .fetch_all(&self.pool);
+                let delivery_notes = query_as::<_, DeliveryNoteSummaryRow>(DELIVERY_NOTE_ROWS_SQL)
+                    .fetch_all(&self.pool);
+                let (receipts, delivery_notes) = tokio::try_join!(receipts, delivery_notes)?;
+                return Ok(build_werka_status_details(
+                    &receipts,
+                    &delivery_notes,
+                    kind,
+                    supplier_ref,
+                ));
+            }
+            "confirmed" => WERKA_STATUS_DETAILS_CONFIRMED_SQL,
+            "returned" => WERKA_STATUS_DETAILS_RETURNED_SQL,
+            _ => return Ok(Vec::new()),
+        };
+        let rows = query_as::<_, WerkaDispatchRecordPushdownRow>(sql)
+            .bind(supplier_ref)
+            .bind(supplier_ref)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     pub(crate) async fn archive(
@@ -235,7 +248,7 @@ impl From<WerkaSummaryPushdownRow> for WerkaHomeSummary {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct WerkaPendingPushdownRow {
+struct WerkaDispatchRecordPushdownRow {
     id: String,
     record_type: String,
     supplier_ref: String,
@@ -251,8 +264,8 @@ struct WerkaPendingPushdownRow {
     created_label: String,
 }
 
-impl From<WerkaPendingPushdownRow> for DispatchRecord {
-    fn from(row: WerkaPendingPushdownRow) -> Self {
+impl From<WerkaDispatchRecordPushdownRow> for DispatchRecord {
+    fn from(row: WerkaDispatchRecordPushdownRow) -> Self {
         Self {
             id: row.id,
             record_type: row.record_type,
@@ -550,6 +563,176 @@ const WERKA_STATUS_BREAKDOWN_PUSHDOWN_SQL: &str = r#"
     FROM ranked_records
     GROUP BY group_key
     ORDER BY receipt_count DESC, LOWER(supplier_name) ASC
+"#;
+
+const WERKA_STATUS_DETAILS_CONFIRMED_SQL: &str = r#"
+    SELECT *
+    FROM (
+        SELECT
+            TRIM(COALESCE(pr.name, '')) AS id,
+            'purchase_receipt' AS record_type,
+            TRIM(COALESCE(pr.supplier, '')) AS supplier_ref,
+            TRIM(COALESCE(pr.supplier_name, '')) AS supplier_name,
+            TRIM(COALESCE(pri.item_code, '')) AS item_code,
+            TRIM(COALESCE(pri.item_name, '')) AS item_name,
+            TRIM(COALESCE(pri.uom, '')) AS uom,
+            CAST(GREATEST(
+                COALESCE(pr.total_qty, 0),
+                CASE
+                    WHEN SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1)
+                         REGEXP '^-?[0-9]+(\\.[0-9]+)?$'
+                    THEN CAST(SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1) AS DECIMAL(18,4))
+                    ELSE COALESCE(pr.total_qty, 0)
+                END
+            ) AS DOUBLE) AS sent_qty,
+            CAST(COALESCE(pr.total_qty, 0) AS DOUBLE) AS accepted_qty,
+            CAST(COALESCE(pri.amount, 0) AS DOUBLE) AS amount,
+            TRIM(COALESCE(pr.currency, '')) AS currency,
+            'accepted' AS status,
+            TRIM(COALESCE(CAST(pr.posting_date AS CHAR), '')) AS created_label
+        FROM `tabPurchase Receipt` pr
+        LEFT JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name AND pri.idx = 1
+        WHERE pr.supplier_delivery_note LIKE 'TG:%'
+          AND pr.docstatus = 1
+          AND LOWER(TRIM(COALESCE(pr.status, ''))) != 'cancelled'
+          AND COALESCE(pr.total_qty, 0) > 0
+          AND COALESCE(pr.total_qty, 0) >= GREATEST(
+              COALESCE(pr.total_qty, 0),
+              CASE
+                  WHEN SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1)
+                       REGEXP '^-?[0-9]+(\\.[0-9]+)?$'
+                  THEN CAST(SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1) AS DECIMAL(18,4))
+                  ELSE COALESCE(pr.total_qty, 0)
+              END
+          )
+        UNION ALL
+        SELECT
+            TRIM(COALESCE(dn.name, '')) AS id,
+            'delivery_note' AS record_type,
+            TRIM(COALESCE(dn.customer, '')) AS supplier_ref,
+            TRIM(COALESCE(dn.customer_name, '')) AS supplier_name,
+            TRIM(COALESCE(dni.item_code, '')) AS item_code,
+            TRIM(COALESCE(dni.item_name, '')) AS item_name,
+            TRIM(COALESCE(dni.uom, '')) AS uom,
+            CAST(COALESCE(dn.total_qty, 0) AS DOUBLE) AS sent_qty,
+            CAST(COALESCE(dn.total_qty, 0) AS DOUBLE) AS accepted_qty,
+            CAST(0 AS DOUBLE) AS amount,
+            '' AS currency,
+            'accepted' AS status,
+            TRIM(COALESCE(CAST(dn.modified AS CHAR), '')) AS created_label
+        FROM `tabDelivery Note` dn
+        LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name AND dni.idx = 1
+        WHERE dn.docstatus = 1
+          AND COALESCE(dn.accord_flow_state, 0) = 1
+          AND COALESCE(dn.accord_customer_state, 0) = 3
+    ) records
+    WHERE (? = '' OR LOWER(TRIM(supplier_ref)) = LOWER(TRIM(?)))
+    ORDER BY created_label DESC
+"#;
+
+const WERKA_STATUS_DETAILS_RETURNED_SQL: &str = r#"
+    SELECT *
+    FROM (
+        SELECT
+            TRIM(COALESCE(pr.name, '')) AS id,
+            'purchase_receipt' AS record_type,
+            TRIM(COALESCE(pr.supplier, '')) AS supplier_ref,
+            TRIM(COALESCE(pr.supplier_name, '')) AS supplier_name,
+            TRIM(COALESCE(pri.item_code, '')) AS item_code,
+            TRIM(COALESCE(pri.item_name, '')) AS item_name,
+            TRIM(COALESCE(pri.uom, '')) AS uom,
+            CAST(GREATEST(
+                COALESCE(pr.total_qty, 0),
+                CASE
+                    WHEN SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1)
+                         REGEXP '^-?[0-9]+(\\.[0-9]+)?$'
+                    THEN CAST(SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1) AS DECIMAL(18,4))
+                    ELSE COALESCE(pr.total_qty, 0)
+                END
+            ) AS DOUBLE) AS sent_qty,
+            CASE
+                WHEN pr.docstatus = 1
+                 AND LOWER(TRIM(COALESCE(pr.status, ''))) != 'cancelled'
+                 AND COALESCE(pr.total_qty, 0) > 0
+                 AND COALESCE(pr.total_qty, 0) < GREATEST(
+                    COALESCE(pr.total_qty, 0),
+                    CASE
+                        WHEN SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1)
+                             REGEXP '^-?[0-9]+(\\.[0-9]+)?$'
+                        THEN CAST(SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1) AS DECIMAL(18,4))
+                        ELSE COALESCE(pr.total_qty, 0)
+                    END
+                 )
+                THEN CAST(COALESCE(pr.total_qty, 0) AS DOUBLE)
+                ELSE CAST(0 AS DOUBLE)
+            END AS accepted_qty,
+            CAST(COALESCE(pri.amount, 0) AS DOUBLE) AS amount,
+            TRIM(COALESCE(pr.currency, '')) AS currency,
+            CASE
+                WHEN pr.docstatus = 2 OR LOWER(TRIM(COALESCE(pr.status, ''))) = 'cancelled' THEN 'cancelled'
+                WHEN COALESCE(pr.total_qty, 0) <= 0 THEN 'rejected'
+                ELSE 'partial'
+            END AS status,
+            TRIM(COALESCE(CAST(pr.posting_date AS CHAR), '')) AS created_label
+        FROM `tabPurchase Receipt` pr
+        LEFT JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name AND pri.idx = 1
+        WHERE pr.supplier_delivery_note LIKE 'TG:%'
+          AND (
+              pr.docstatus = 2
+              OR LOWER(TRIM(COALESCE(pr.status, ''))) = 'cancelled'
+              OR (
+                  pr.docstatus = 1
+                  AND (
+                      COALESCE(pr.total_qty, 0) <= 0
+                      OR COALESCE(pr.total_qty, 0) < GREATEST(
+                          COALESCE(pr.total_qty, 0),
+                          CASE
+                              WHEN SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1)
+                                   REGEXP '^-?[0-9]+(\\.[0-9]+)?$'
+                              THEN CAST(SUBSTRING_INDEX(COALESCE(pr.supplier_delivery_note, ''), ':', -1) AS DECIMAL(18,4))
+                              ELSE COALESCE(pr.total_qty, 0)
+                          END
+                      )
+                  )
+              )
+          )
+        UNION ALL
+        SELECT
+            TRIM(COALESCE(dn.name, '')) AS id,
+            'delivery_note' AS record_type,
+            TRIM(COALESCE(dn.customer, '')) AS supplier_ref,
+            TRIM(COALESCE(dn.customer_name, '')) AS supplier_name,
+            TRIM(COALESCE(dni.item_code, '')) AS item_code,
+            TRIM(COALESCE(dni.item_name, '')) AS item_name,
+            TRIM(COALESCE(dni.uom, '')) AS uom,
+            CAST(COALESCE(dn.total_qty, 0) AS DOUBLE) AS sent_qty,
+            CASE
+                WHEN COALESCE(dn.accord_customer_state, 0) = 4 THEN CAST(GREATEST(
+                    COALESCE(dn.total_qty, 0) -
+                    CASE
+                        WHEN COALESCE(dni.returned_qty, 0) <= 0 THEN GREATEST(COALESCE(dn.total_qty, 0), 0)
+                        ELSE COALESCE(dni.returned_qty, 0)
+                    END,
+                    0
+                ) AS DOUBLE)
+                ELSE CAST(0 AS DOUBLE)
+            END AS accepted_qty,
+            CAST(0 AS DOUBLE) AS amount,
+            '' AS currency,
+            CASE
+                WHEN COALESCE(dn.accord_customer_state, 0) = 4 THEN 'partial'
+                ELSE 'rejected'
+            END AS status,
+            TRIM(COALESCE(CAST(dn.modified AS CHAR), '')) AS created_label
+        FROM `tabDelivery Note` dn
+        LEFT JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name AND dni.idx = 1
+        WHERE dn.docstatus = 1
+          AND COALESCE(dn.accord_flow_state, 0) = 1
+          AND COALESCE(dn.accord_customer_state, 0) IN (2, 4)
+    )
+    records
+    WHERE (? = '' OR LOWER(TRIM(supplier_ref)) = LOWER(TRIM(?)))
+    ORDER BY created_label DESC
 "#;
 
 const SUPPLIER_ACK_ROWS_LIMIT_SQL: &str = r#"
