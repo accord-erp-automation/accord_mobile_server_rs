@@ -245,6 +245,17 @@ Expected result:
 - less Rust-side sorting/grouping work;
 - better behavior under high concurrency.
 
+Benchmark result:
+
+- restored ERPNext DB benchmark on 2026-05-15 confirmed equal output between
+  current raw-row/Rust aggregation and SQL pushdown for `summary`, `pending`,
+  and `status_breakdown`;
+- SQL pushdown was faster on every measured case;
+- median speedup was 8.5x for `summary`, 1.4x for `pending`, and 3.7x-4.9x for
+  `status_breakdown`.
+
+Details: [2026-05-15 SQL pushdown benchmark](benchmarks/2026-05-15-sql-pushdown.md).
+
 ### 5. Index Review
 
 Problem:
