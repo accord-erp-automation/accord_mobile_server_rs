@@ -34,7 +34,10 @@ impl DirectDbReader {
             .password(&config.password)
             .database(&config.name);
         let pool = MySqlPoolOptions::new()
-            .max_connections(12)
+            .min_connections(config.pool.min_connections)
+            .max_connections(config.pool.max_connections)
+            .acquire_timeout(config.pool.acquire_timeout)
+            .idle_timeout(config.pool.idle_timeout)
             .connect_lazy_with(options);
 
         Self {

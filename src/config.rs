@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -139,6 +140,7 @@ pub struct DirectDbConfig {
     pub password: String,
     pub encryption_key: String,
     pub default_warehouse: String,
+    pub pool: DirectDbPoolConfig,
 }
 
 impl DirectDbConfig {
@@ -167,8 +169,69 @@ impl DirectDbConfig {
             password: site.db_password.trim().to_string(),
             encryption_key: site.encryption_key.trim().to_string(),
             default_warehouse: String::new(),
+            pool: DirectDbPoolConfig::from_env(),
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectDbPoolConfig {
+    pub min_connections: u32,
+    pub max_connections: u32,
+    pub acquire_timeout: Duration,
+    pub idle_timeout: Duration,
+}
+
+impl DirectDbPoolConfig {
+    fn from_env() -> Self {
+        Self::from_env_with(system_resources(), |key| std::env::var(key).ok())
+    }
+
+    fn from_env_with(resources: SystemResources, get_env: impl Fn(&str) -> Option<String>) -> Self {
+        let defaults = Self::auto_defaults(resources);
+        let max_connections = get_env_u32(&get_env, "ERP_DIRECT_DB_MAX_CONNECTIONS")
+            .filter(|value| *value > 0)
+            .unwrap_or(defaults.max_connections);
+        let min_connections = get_env_u32(&get_env, "ERP_DIRECT_DB_MIN_CONNECTIONS")
+            .filter(|value| *value > 0)
+            .unwrap_or(defaults.min_connections)
+            .min(max_connections);
+        let acquire_timeout = get_env_duration_ms(&get_env, "ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS")
+            .unwrap_or(defaults.acquire_timeout);
+        let idle_timeout = get_env_duration_seconds(&get_env, "ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS")
+            .unwrap_or(defaults.idle_timeout);
+
+        Self {
+            min_connections,
+            max_connections,
+            acquire_timeout,
+            idle_timeout,
+        }
+    }
+
+    fn auto_defaults(resources: SystemResources) -> Self {
+        let cpu_target = (resources.cpu_count as u32).saturating_mul(2).clamp(4, 32);
+        let memory_target = resources
+            .total_memory_bytes
+            .map(|bytes| (bytes / (512 * 1024 * 1024)) as u32)
+            .unwrap_or(16)
+            .clamp(4, 64);
+        let max_connections = cpu_target.min(memory_target).max(4);
+        let min_connections = (max_connections / 4).clamp(1, 4);
+
+        Self {
+            min_connections,
+            max_connections,
+            acquire_timeout: Duration::from_millis(500),
+            idle_timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SystemResources {
+    cpu_count: usize,
+    total_memory_bytes: Option<u64>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -258,6 +321,66 @@ fn env_or(key: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
+fn get_env_u32(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
+    get_env(key).and_then(|raw| raw.trim().parse::<u32>().ok())
+}
+
+fn get_env_duration_ms(get_env: &impl Fn(&str) -> Option<String>, key: &str) -> Option<Duration> {
+    get_env_u32(get_env, key)
+        .filter(|value| *value > 0)
+        .map(|value| Duration::from_millis(u64::from(value)))
+}
+
+fn get_env_duration_seconds(
+    get_env: &impl Fn(&str) -> Option<String>,
+    key: &str,
+) -> Option<Duration> {
+    get_env_u32(get_env, key)
+        .filter(|value| *value > 0)
+        .map(|value| Duration::from_secs(u64::from(value)))
+}
+
+fn system_resources() -> SystemResources {
+    SystemResources {
+        cpu_count: std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(4),
+        total_memory_bytes: detect_total_memory_bytes(),
+    }
+}
+
+fn detect_total_memory_bytes() -> Option<u64> {
+    detect_proc_meminfo_bytes().or_else(detect_sysctl_memsize_bytes)
+}
+
+fn detect_proc_meminfo_bytes() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|raw| parse_proc_meminfo_bytes(&raw))
+}
+
+fn parse_proc_meminfo_bytes(raw: &str) -> Option<u64> {
+    raw.lines().find_map(|line| {
+        let rest = line.strip_prefix("MemTotal:")?.trim();
+        let kb = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+        kb.checked_mul(1024)
+    })
+}
+
+fn detect_sysctl_memsize_bytes() -> Option<u64> {
+    let output = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|bytes| *bytes > 0)
+}
+
 fn parse_bind_addr(raw: &str) -> Result<SocketAddr, AppError> {
     let trimmed = raw.trim();
     let normalized = if trimmed.starts_with(':') {
@@ -274,8 +397,12 @@ fn parse_bind_addr(raw: &str) -> Result<SocketAddr, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DirectDbConfig, DotEnvPersister, parse_bind_addr};
+    use super::{
+        DirectDbConfig, DirectDbPoolConfig, DotEnvPersister, SystemResources, parse_bind_addr,
+        parse_proc_meminfo_bytes,
+    };
     use crate::core::admin::ports::AdminEnvPersister;
+    use std::time::Duration;
 
     #[test]
     fn parses_go_style_bind_addr() {
@@ -302,6 +429,53 @@ mod tests {
         assert_eq!(config.user, "_site1");
         assert_eq!(config.password, "secret");
         assert_eq!(config.encryption_key, "");
+        assert!(config.pool.max_connections >= config.pool.min_connections);
+        assert!(config.pool.max_connections >= 4);
+        assert_eq!(config.pool.acquire_timeout, Duration::from_millis(500));
+        assert_eq!(config.pool.idle_timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn direct_db_pool_defaults_scale_from_cpu_and_memory() {
+        let pool = DirectDbPoolConfig::auto_defaults(SystemResources {
+            cpu_count: 8,
+            total_memory_bytes: Some(16 * 1024 * 1024 * 1024),
+        });
+
+        assert_eq!(pool.max_connections, 16);
+        assert_eq!(pool.min_connections, 4);
+        assert_eq!(pool.acquire_timeout, Duration::from_millis(500));
+        assert_eq!(pool.idle_timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn direct_db_pool_env_overrides_defaults_and_clamps_min() {
+        let env = std::collections::BTreeMap::from([
+            ("ERP_DIRECT_DB_MAX_CONNECTIONS", "12"),
+            ("ERP_DIRECT_DB_MIN_CONNECTIONS", "20"),
+            ("ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS", "900"),
+            ("ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS", "30"),
+        ]);
+        let pool = DirectDbPoolConfig::from_env_with(
+            SystemResources {
+                cpu_count: 4,
+                total_memory_bytes: Some(8 * 1024 * 1024 * 1024),
+            },
+            |key| env.get(key).map(|value| value.to_string()),
+        );
+
+        assert_eq!(pool.max_connections, 12);
+        assert_eq!(pool.min_connections, 12);
+        assert_eq!(pool.acquire_timeout, Duration::from_millis(900));
+        assert_eq!(pool.idle_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn proc_meminfo_parser_reads_total_memory_bytes() {
+        let bytes = parse_proc_meminfo_bytes("MemTotal:       16384000 kB\nMemFree: 1 kB\n")
+            .expect("memtotal");
+
+        assert_eq!(bytes, 16_384_000 * 1024);
     }
 
     #[test]

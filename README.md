@@ -465,6 +465,10 @@ runtime through admin settings. Admin settings persist selected values back to
 | `ERP_DIRECT_DB_USER` | Optional DB user override. |
 | `ERP_DIRECT_DB_PASSWORD` | Optional DB password override. |
 | `ERP_DIRECT_DB_NAME` | Optional DB name override. |
+| `ERP_DIRECT_DB_MAX_CONNECTIONS` | Optional pool max override. Default is auto-calculated from CPU/RAM. |
+| `ERP_DIRECT_DB_MIN_CONNECTIONS` | Optional pool min override. Default is derived from max. |
+| `ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS` | Optional pool acquire timeout override. Default `500`. |
+| `ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS` | Optional idle connection timeout override. Default `60`. |
 
 The site config must describe a MariaDB site. The default DB host is
 `127.0.0.1`, the default port is `3306`, and the default DB user is the DB name.
@@ -518,6 +522,10 @@ MOBILE_DEV_WERKA_NAME=Werka
 
 ERP_DIRECT_READ_ENABLED=1
 ERP_DIRECT_SITE_CONFIG_PATH=/path/to/frappe/sites/site.local/site_config.json
+ERP_DIRECT_DB_MAX_CONNECTIONS=
+ERP_DIRECT_DB_MIN_CONNECTIONS=
+ERP_DIRECT_DB_ACQUIRE_TIMEOUT_MS=500
+ERP_DIRECT_DB_IDLE_TIMEOUT_SECONDS=60
 
 FCM_SERVICE_ACCOUNT_PATH=/path/to/firebase-adminsdk.json
 GEMINI_API_KEY=
