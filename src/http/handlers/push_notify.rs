@@ -4,6 +4,7 @@ use crate::app::AppState;
 use crate::core::auth::models::PrincipalRole;
 use crate::core::werka::models::{DispatchRecord, WerkaCustomerIssueRecord};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn send_dispatch_record(
     state: &AppState,
     key: String,

@@ -37,11 +37,7 @@ pub(super) fn normalize_item_codes(values: Vec<String>) -> Vec<String> {
 }
 
 pub(super) fn normalize_admin_phone(phone: &str) -> Result<String, AdminPortError> {
-    let mut clean = phone
-        .replace(' ', "")
-        .replace('-', "")
-        .replace('(', "")
-        .replace(')', "");
+    let mut clean = phone.replace([' ', '-', '(', ')'], "");
     if !clean.trim().starts_with('+') && clean.len() == 9 {
         clean = format!("998{clean}");
     }

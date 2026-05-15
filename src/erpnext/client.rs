@@ -77,13 +77,13 @@ impl ErpnextClient {
             .read()
             .expect("erp credential provider lock")
             .clone();
-        if let Some(provider) = provider {
-            if let Ok((api_key, api_secret)) = provider.admin_api_auth("Administrator").await {
-                let api_key = api_key.trim();
-                let api_secret = api_secret.trim();
-                if !api_key.is_empty() && !api_secret.is_empty() {
-                    return format!("token {api_key}:{api_secret}");
-                }
+        if let Some(provider) = provider
+            && let Ok((api_key, api_secret)) = provider.admin_api_auth("Administrator").await
+        {
+            let api_key = api_key.trim();
+            let api_secret = api_secret.trim();
+            if !api_key.is_empty() && !api_secret.is_empty() {
+                return format!("token {api_key}:{api_secret}");
             }
         }
 

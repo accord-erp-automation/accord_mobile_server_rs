@@ -17,10 +17,10 @@ pub fn supplier_access_code(input: &SupplierAccessInput) -> Result<String, AuthE
     }
 
     let mut seed = input.ref_.trim().to_string();
-    if seed.is_empty() {
-        if let Ok(phone) = normalize_phone(input.phone.trim()) {
-            seed = phone;
-        }
+    if seed.is_empty()
+        && let Ok(phone) = normalize_phone(input.phone.trim())
+    {
+        seed = phone;
     }
     if seed.is_empty() {
         seed = name.to_string();

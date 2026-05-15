@@ -303,11 +303,7 @@ pub fn normalize_phone(input: &str) -> Result<String, AuthError> {
 }
 
 fn normalize_config_phone(phone: &str) -> Result<String, AuthError> {
-    let mut clean = phone
-        .replace(' ', "")
-        .replace('-', "")
-        .replace('(', "")
-        .replace(')', "");
+    let mut clean = phone.replace([' ', '-', '(', ')'], "");
 
     if !clean.trim().starts_with('+') && clean.len() == 9 {
         clean = format!("998{clean}");

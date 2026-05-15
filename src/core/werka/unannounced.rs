@@ -47,14 +47,14 @@ pub(crate) fn purchase_receipt_to_dispatch_record(
         .unwrap_or(draft.qty);
     let (accepted_from_note, returned_from_note) =
         extract_accord_decision_quantities(&draft.remarks);
-    let status = if draft.doc_status == 0
+    let status = if (draft.doc_status == 0
         && (unannounced_state == "rejected"
             || (accepted_from_note <= 0.0
                 && returned_from_note >= sent_qty
-                && returned_from_note > 0.0))
+                && returned_from_note > 0.0)))
+        || draft.doc_status == 2
+        || draft.status.trim().eq_ignore_ascii_case("Cancelled")
     {
-        "cancelled"
-    } else if draft.doc_status == 2 || draft.status.trim().eq_ignore_ascii_case("Cancelled") {
         "cancelled"
     } else if draft.doc_status == 1 {
         dispatch_status_from_quantities(sent_qty, draft.qty)
@@ -165,15 +165,13 @@ pub(crate) async fn validate_unannounced_supplier_item(
     item_code: &str,
     state: &WerkaSupplierAdminState,
 ) -> Result<(), WerkaPortError> {
-    if let Some(lookup) = lookup {
-        if let Ok(items) = lookup.werka_supplier_items(supplier_ref, "", 200, 0).await {
-            if items
-                .iter()
-                .any(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
-            {
-                return Ok(());
-            }
-        }
+    if let Some(lookup) = lookup
+        && let Ok(items) = lookup.werka_supplier_items(supplier_ref, "", 200, 0).await
+        && items
+            .iter()
+            .any(|item| item.code.trim().eq_ignore_ascii_case(item_code.trim()))
+    {
+        return Ok(());
     }
 
     match writer

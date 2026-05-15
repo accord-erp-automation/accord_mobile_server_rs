@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -84,7 +84,7 @@ impl PushTokenStorePort for PushTokenStore {
 }
 
 async fn load_if_needed(
-    path: &PathBuf,
+    path: &Path,
     state: &mut PushTokenStoreState,
 ) -> Result<(), PushStoreError> {
     if state.loaded {

@@ -125,21 +125,21 @@ impl AdminService {
         let now = OffsetDateTime::now_utc();
         let mut api_key = config.erp_api_key.clone();
         let mut api_secret = config.erp_api_secret.clone();
-        if let Some(port) = &self.credential_port {
-            if let Ok((current_key, current_secret)) = port.admin_api_auth("Administrator").await {
-                if !current_key.trim().is_empty() {
-                    api_key = current_key.trim().to_string();
-                }
-                if !current_secret.trim().is_empty() {
-                    api_secret = current_secret.trim().to_string();
-                }
-                self.update_erp_runtime(
-                    &config.erp_url,
-                    &api_key,
-                    &api_secret,
-                    &config.default_target_warehouse,
-                );
+        if let Some(port) = &self.credential_port
+            && let Ok((current_key, current_secret)) = port.admin_api_auth("Administrator").await
+        {
+            if !current_key.trim().is_empty() {
+                api_key = current_key.trim().to_string();
             }
+            if !current_secret.trim().is_empty() {
+                api_secret = current_secret.trim().to_string();
+            }
+            self.update_erp_runtime(
+                &config.erp_url,
+                &api_key,
+                &api_secret,
+                &config.default_target_warehouse,
+            );
         }
         Ok(AdminSettings {
             erp_url: config.erp_url.clone(),

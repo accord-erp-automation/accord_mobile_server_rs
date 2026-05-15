@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -49,7 +49,7 @@ impl ProfileStorePort for ProfileStore {
 }
 
 async fn load_if_needed(
-    path: &PathBuf,
+    path: &Path,
     state: &mut ProfileStoreState,
 ) -> Result<(), ProfileStoreError> {
     if state.loaded {

@@ -135,10 +135,10 @@ impl ProfileService {
     }
 
     async fn merge_prefs(&self, mut principal: Principal) -> Principal {
-        if let Some(store) = &self.store {
-            if let Ok(prefs) = store.get(&profile_key(&principal)).await {
-                principal = merge_profile_prefs(principal, prefs);
-            }
+        if let Some(store) = &self.store
+            && let Ok(prefs) = store.get(&profile_key(&principal)).await
+        {
+            principal = merge_profile_prefs(principal, prefs);
         }
         if principal.display_name.is_empty() {
             principal.display_name = principal.legal_name.clone();

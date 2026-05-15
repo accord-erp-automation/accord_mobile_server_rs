@@ -57,10 +57,9 @@ pub(super) async fn ensure_delivery_note_state_fields(
                 Some(field_payload(field, true)),
             )
             .await
+            && !error.to_string().to_lowercase().contains("duplicate")
         {
-            if !error.to_string().to_lowercase().contains("duplicate") {
-                return Err(error);
-            }
+            return Err(error);
         }
     }
 
