@@ -56,3 +56,27 @@ Before the LMDB implementation, the same JSON-only code path was measured at:
 
 The post-refactor JSON result stayed in the same range, while LMDB removed the
 session-store bottleneck for this login-heavy workload.
+
+## LMDB v2 Follow-up
+
+A follow-up run measured the hardened LMDB implementation after these changes:
+
+- LMDB keys store `SHA-256(token)` instead of raw bearer tokens.
+- LMDB values use a versioned binary codec with JSON fallback for legacy rows.
+- Expiration cleanup uses a sorted LMDB index instead of scanning sessions.
+
+Environment stayed the same, except the release binary was already built and
+started directly with:
+
+```text
+./target/release/accord_mobile_server_rs
+```
+
+| Backend | Requests | Concurrency | RPS | Median | p95 | p99 | Failed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| JSON follow-up | 2000 | 100 | 467.58 | 182ms | 370ms | 386ms | 0 |
+| LMDB v2 | 2000 | 100 | 6319.83 | 14ms | 35ms | 50ms | 0 |
+
+LMDB v2 was about `13.5x` faster than the same-run JSON backend and about
+`1.35x` faster than the first LMDB implementation. p95 latency improved from
+`370ms` on JSON to `35ms` on LMDB v2.
