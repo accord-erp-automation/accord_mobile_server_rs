@@ -16,6 +16,8 @@ dependencies = [
  "dotenvy",
  "heed",
  "hmac",
+ "hyper",
+ "hyper-util",
  "jsonwebtoken",
  "rand 0.9.4",
  "reqwest",

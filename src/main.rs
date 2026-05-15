@@ -13,10 +13,14 @@ mod store;
 
 use crate::app::AppState;
 use crate::config::AppConfig;
-use axum::serve::ListenerExt;
+use axum::Router;
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
+use hyper_util::service::TowerToHyperService;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<(), error::AppError> {
@@ -35,26 +39,16 @@ async fn main() -> Result<(), error::AppError> {
     let listener_count = listener_count();
     if listener_count == 1 {
         let listener = bind_tcp_listener(bind_addr)?;
-        let listener = listener.tap_io(|tcp_stream| {
-            if let Err(error) = tcp_stream.set_nodelay(true) {
-                tracing::trace!(%error, "failed to enable TCP_NODELAY");
-            }
-        });
-        axum::serve(listener, app).await?;
+        serve_listener(listener, app, 0).await?;
     } else {
         tracing::info!(listener_count, "starting reuseport listener workers");
         let mut handles = Vec::with_capacity(listener_count);
         for worker in 0..listener_count {
             let listener = bind_tcp_listener(bind_addr)?;
-            let listener = listener.tap_io(|tcp_stream| {
-                if let Err(error) = tcp_stream.set_nodelay(true) {
-                    tracing::trace!(%error, "failed to enable TCP_NODELAY");
-                }
-            });
             let app = app.clone();
             handles.push(tokio::spawn(async move {
                 tracing::info!(worker, "listener worker started");
-                axum::serve(listener, app).await
+                serve_listener(listener, app, worker).await
             }));
         }
         for handle in handles {
@@ -65,6 +59,31 @@ async fn main() -> Result<(), error::AppError> {
     }
 
     Ok(())
+}
+
+async fn serve_listener(
+    listener: TcpListener,
+    app: Router,
+    worker: usize,
+) -> Result<(), error::AppError> {
+    loop {
+        let (stream, peer_addr) = listener.accept().await?;
+        if let Err(error) = stream.set_nodelay(true) {
+            tracing::trace!(%error, %peer_addr, worker, "failed to enable TCP_NODELAY");
+        }
+
+        let app = app.clone();
+        tokio::spawn(async move {
+            let io = TokioIo::new(stream);
+            let service = TowerToHyperService::new(app);
+            let mut builder = http1::Builder::new();
+            builder.keep_alive(true);
+
+            if let Err(error) = builder.serve_connection(io, service).await {
+                tracing::trace!(%error, %peer_addr, worker, "connection failed");
+            }
+        });
+    }
 }
 
 fn listener_count() -> usize {
