@@ -44,33 +44,38 @@ impl AppState {
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let mut werka = WerkaService::new();
-        let session_store_backend =
-            std::env::var("MOBILE_API_SESSION_STORE_BACKEND").unwrap_or_else(|_| "json".into());
-        let sessions = match session_store_backend.trim().to_lowercase().as_str() {
-            "lmdb" => match SessionManager::lmdb(
-                session_lmdb_path(),
-                session_lmdb_map_size_bytes(),
-                config.session_ttl_seconds,
-            ) {
-                Ok(sessions) => {
-                    tracing::info!(
-                        path = %session_lmdb_path().display(),
-                        "LMDB session store enabled"
-                    );
-                    sessions
+        let sessions = match local_store_backend("MOBILE_API_SESSION_STORE_BACKEND") {
+            LocalStoreBackend::Lmdb => {
+                let lmdb_path = session_lmdb_path(&config);
+                match SessionManager::lmdb(
+                    lmdb_path.clone(),
+                    local_lmdb_map_size_bytes("MOBILE_API_SESSION_LMDB_MAP_SIZE_MB"),
+                    config.session_ttl_seconds,
+                ) {
+                    Ok(sessions) => {
+                        tracing::info!(
+                            path = %lmdb_path.display(),
+                            "LMDB session store enabled"
+                        );
+                        sessions
+                    }
+                    Err(error) => {
+                        if allow_json_fallback() {
+                            tracing::warn!(
+                                %error,
+                                "LMDB session store unavailable; falling back to JSON session store"
+                            );
+                            SessionManager::persistent(
+                                config.session_store_path.clone(),
+                                config.session_ttl_seconds,
+                            )
+                        } else {
+                            panic!("LMDB session store unavailable: {error}");
+                        }
+                    }
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "LMDB session store unavailable; falling back to JSON session store"
-                    );
-                    SessionManager::persistent(
-                        config.session_store_path.clone(),
-                        config.session_ttl_seconds,
-                    )
-                }
-            },
-            _ => SessionManager::persistent(
+            }
+            LocalStoreBackend::Json => SessionManager::persistent(
                 config.session_store_path.clone(),
                 config.session_ttl_seconds,
             ),
@@ -157,14 +162,47 @@ impl AppState {
     }
 }
 
-fn session_lmdb_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_SESSION_LMDB_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_sessions.lmdb"))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalStoreBackend {
+    Lmdb,
+    Json,
 }
 
-fn session_lmdb_map_size_bytes() -> usize {
-    std::env::var("MOBILE_API_SESSION_LMDB_MAP_SIZE_MB")
+fn local_store_backend(env_key: &'static str) -> LocalStoreBackend {
+    let raw = std::env::var(env_key).ok();
+    let backend = local_store_backend_from(raw.as_deref());
+    if raw.is_some()
+        && !matches!(
+            raw.as_deref().map(|value| value.trim().to_lowercase()),
+            Some(value) if value == "lmdb" || value == "json"
+        )
+    {
+        tracing::warn!(
+            env_key,
+            value = %raw.as_deref().unwrap_or_default(),
+            "unknown local store backend; using LMDB"
+        );
+    }
+    backend
+}
+
+fn local_store_backend_from(raw: Option<&str>) -> LocalStoreBackend {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case("json") => LocalStoreBackend::Json,
+        _ => LocalStoreBackend::Lmdb,
+    }
+}
+
+fn session_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
+    lmdb_path(
+        "MOBILE_API_SESSION_LMDB_PATH",
+        &config.session_store_path,
+        "data/mobile_sessions.lmdb",
+    )
+}
+
+fn local_lmdb_map_size_bytes(env_key: &str) -> usize {
+    std::env::var(env_key)
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -174,136 +212,233 @@ fn session_lmdb_map_size_bytes() -> usize {
 }
 
 fn build_profile_store(config: &AppConfig) -> Arc<dyn ProfileStorePort> {
-    let backend =
-        std::env::var("MOBILE_API_PROFILE_STORE_BACKEND").unwrap_or_else(|_| "json".into());
-    match backend.trim().to_lowercase().as_str() {
-        "lmdb" => match LmdbProfileStore::open(
-            profile_lmdb_path(),
-            profile_lmdb_map_size_bytes(),
-            Some(config.profile_store_path.clone()),
-        ) {
-            Ok(store) => {
-                tracing::info!(
-                    path = %profile_lmdb_path().display(),
-                    legacy_json_path = %config.profile_store_path.display(),
-                    "LMDB profile preference store enabled"
-                );
-                Arc::new(store)
+    match local_store_backend("MOBILE_API_PROFILE_STORE_BACKEND") {
+        LocalStoreBackend::Lmdb => {
+            let lmdb_path = profile_lmdb_path(config);
+            match LmdbProfileStore::open(
+                lmdb_path.clone(),
+                local_lmdb_map_size_bytes("MOBILE_API_PROFILE_LMDB_MAP_SIZE_MB"),
+                Some(config.profile_store_path.clone()),
+            ) {
+                Ok(store) => {
+                    tracing::info!(
+                        path = %lmdb_path.display(),
+                        legacy_json_path = %config.profile_store_path.display(),
+                        "LMDB profile preference store enabled"
+                    );
+                    Arc::new(store)
+                }
+                Err(error) => {
+                    if allow_json_fallback() {
+                        tracing::warn!(
+                            %error,
+                            "LMDB profile preference store unavailable; falling back to JSON profile store"
+                        );
+                        Arc::new(ProfileStore::new(config.profile_store_path.clone()))
+                    } else {
+                        panic!("LMDB profile preference store unavailable: {error}");
+                    }
+                }
             }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "LMDB profile preference store unavailable; falling back to JSON profile store"
-                );
-                Arc::new(ProfileStore::new(config.profile_store_path.clone()))
-            }
-        },
-        _ => Arc::new(ProfileStore::new(config.profile_store_path.clone())),
+        }
+        LocalStoreBackend::Json => Arc::new(ProfileStore::new(config.profile_store_path.clone())),
     }
 }
 
-fn profile_lmdb_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_PROFILE_LMDB_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_profile_prefs.lmdb"))
-}
-
-fn profile_lmdb_map_size_bytes() -> usize {
-    std::env::var("MOBILE_API_PROFILE_LMDB_MAP_SIZE_MB")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(64)
-        * 1024
-        * 1024
+fn profile_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
+    lmdb_path(
+        "MOBILE_API_PROFILE_LMDB_PATH",
+        &config.profile_store_path,
+        "data/mobile_profile_prefs.lmdb",
+    )
 }
 
 fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
-    let backend =
-        std::env::var("MOBILE_API_PUSH_TOKEN_STORE_BACKEND").unwrap_or_else(|_| "json".into());
-    match backend.trim().to_lowercase().as_str() {
-        "lmdb" => match LmdbPushTokenStore::open(
-            push_token_lmdb_path(),
-            push_token_lmdb_map_size_bytes(),
-            Some(config.push_token_store_path.clone()),
-        ) {
-            Ok(store) => {
-                tracing::info!(
-                    path = %push_token_lmdb_path().display(),
-                    legacy_json_path = %config.push_token_store_path.display(),
-                    "LMDB push token store enabled"
-                );
-                Arc::new(store)
+    match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
+        LocalStoreBackend::Lmdb => {
+            let lmdb_path = push_token_lmdb_path(config);
+            match LmdbPushTokenStore::open(
+                lmdb_path.clone(),
+                local_lmdb_map_size_bytes("MOBILE_API_PUSH_TOKEN_LMDB_MAP_SIZE_MB"),
+                Some(config.push_token_store_path.clone()),
+            ) {
+                Ok(store) => {
+                    tracing::info!(
+                        path = %lmdb_path.display(),
+                        legacy_json_path = %config.push_token_store_path.display(),
+                        "LMDB push token store enabled"
+                    );
+                    Arc::new(store)
+                }
+                Err(error) => {
+                    if allow_json_fallback() {
+                        tracing::warn!(
+                            %error,
+                            "LMDB push token store unavailable; falling back to JSON push token store"
+                        );
+                        Arc::new(PushTokenStore::new(config.push_token_store_path.clone()))
+                    } else {
+                        panic!("LMDB push token store unavailable: {error}");
+                    }
+                }
             }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "LMDB push token store unavailable; falling back to JSON push token store"
-                );
-                Arc::new(PushTokenStore::new(config.push_token_store_path.clone()))
-            }
-        },
-        _ => Arc::new(PushTokenStore::new(config.push_token_store_path.clone())),
+        }
+        LocalStoreBackend::Json => {
+            Arc::new(PushTokenStore::new(config.push_token_store_path.clone()))
+        }
     }
 }
 
-fn push_token_lmdb_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_PUSH_TOKEN_LMDB_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_push_tokens.lmdb"))
-}
-
-fn push_token_lmdb_map_size_bytes() -> usize {
-    std::env::var("MOBILE_API_PUSH_TOKEN_LMDB_MAP_SIZE_MB")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(64)
-        * 1024
-        * 1024
+fn push_token_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
+    lmdb_path(
+        "MOBILE_API_PUSH_TOKEN_LMDB_PATH",
+        &config.push_token_store_path,
+        "data/mobile_push_tokens.lmdb",
+    )
 }
 
 fn build_admin_supplier_state_store(config: &AppConfig) -> AdminSupplierStateBackend {
-    let backend =
-        std::env::var("MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND").unwrap_or_else(|_| "json".into());
-    match backend.trim().to_lowercase().as_str() {
-        "lmdb" => match AdminSupplierStateBackend::lmdb(
-            admin_supplier_lmdb_path(),
-            admin_supplier_lmdb_map_size_bytes(),
-            Some(config.admin_supplier_store_path.clone()),
-        ) {
-            Ok(store) => {
-                tracing::info!(
-                    path = %admin_supplier_lmdb_path().display(),
-                    legacy_json_path = %config.admin_supplier_store_path.display(),
-                    "LMDB admin supplier state store enabled"
-                );
-                store
+    match local_store_backend("MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND") {
+        LocalStoreBackend::Lmdb => {
+            let lmdb_path = admin_supplier_lmdb_path(config);
+            match AdminSupplierStateBackend::lmdb(
+                lmdb_path.clone(),
+                local_lmdb_map_size_bytes("MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB"),
+                Some(config.admin_supplier_store_path.clone()),
+            ) {
+                Ok(store) => {
+                    tracing::info!(
+                        path = %lmdb_path.display(),
+                        legacy_json_path = %config.admin_supplier_store_path.display(),
+                        "LMDB admin supplier state store enabled"
+                    );
+                    store
+                }
+                Err(error) => {
+                    if allow_json_fallback() {
+                        tracing::warn!(
+                            %error,
+                            "LMDB admin supplier state store unavailable; falling back to JSON admin supplier state store"
+                        );
+                        AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone())
+                    } else {
+                        panic!("LMDB admin supplier state store unavailable: {error}");
+                    }
+                }
             }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "LMDB admin supplier state store unavailable; falling back to JSON admin supplier state store"
-                );
-                AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone())
-            }
-        },
-        _ => AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone()),
+        }
+        LocalStoreBackend::Json => {
+            AdminSupplierStateBackend::json(config.admin_supplier_store_path.clone())
+        }
     }
 }
 
-fn admin_supplier_lmdb_path() -> std::path::PathBuf {
-    std::env::var("MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_admin_suppliers.lmdb"))
+fn admin_supplier_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
+    lmdb_path(
+        "MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH",
+        &config.admin_supplier_store_path,
+        "data/mobile_admin_suppliers.lmdb",
+    )
 }
 
-fn admin_supplier_lmdb_map_size_bytes() -> usize {
-    std::env::var("MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(64)
-        * 1024
-        * 1024
+fn lmdb_path(
+    env_key: &str,
+    legacy_json_path: &std::path::Path,
+    hardcoded_default: &str,
+) -> std::path::PathBuf {
+    match std::env::var(env_key) {
+        Ok(path) => std::path::PathBuf::from(path),
+        Err(_) => {
+            #[cfg(test)]
+            {
+                test_lmdb_path(legacy_json_path, hardcoded_default)
+            }
+            #[cfg(not(test))]
+            {
+                derive_lmdb_path(legacy_json_path, hardcoded_default)
+            }
+        }
+    }
+}
+
+fn derive_lmdb_path(
+    legacy_json_path: &std::path::Path,
+    hardcoded_default: &str,
+) -> std::path::PathBuf {
+    if legacy_json_path.as_os_str().is_empty() {
+        return std::path::PathBuf::from(hardcoded_default);
+    }
+    legacy_json_path.with_extension("lmdb")
+}
+
+fn allow_json_fallback() -> bool {
+    std::env::var("MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK").is_ok_and(|raw| raw.trim() == "1")
+}
+
+#[cfg(test)]
+fn test_lmdb_path(
+    legacy_json_path: &std::path::Path,
+    hardcoded_default: &str,
+) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = legacy_json_path
+        .file_stem()
+        .or_else(|| std::path::Path::new(hardcoded_default).file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("local-store");
+    std::env::temp_dir().join(format!(
+        "accord-mobile-server-rs-lmdb-test-{}-{count}-{stem}.lmdb",
+        std::process::id()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{LocalStoreBackend, derive_lmdb_path, local_store_backend_from};
+
+    #[test]
+    fn local_store_backend_defaults_to_lmdb_for_production() {
+        assert_eq!(local_store_backend_from(None), LocalStoreBackend::Lmdb);
+        assert_eq!(local_store_backend_from(Some("")), LocalStoreBackend::Lmdb);
+        assert_eq!(
+            local_store_backend_from(Some("unknown")),
+            LocalStoreBackend::Lmdb
+        );
+    }
+
+    #[test]
+    fn local_store_backend_accepts_explicit_json_and_lmdb() {
+        assert_eq!(
+            local_store_backend_from(Some("json")),
+            LocalStoreBackend::Json
+        );
+        assert_eq!(
+            local_store_backend_from(Some(" JSON ")),
+            LocalStoreBackend::Json
+        );
+        assert_eq!(
+            local_store_backend_from(Some("lmdb")),
+            LocalStoreBackend::Lmdb
+        );
+        assert_eq!(
+            local_store_backend_from(Some(" LMDB ")),
+            LocalStoreBackend::Lmdb
+        );
+    }
+
+    #[test]
+    fn lmdb_path_defaults_next_to_legacy_json_path() {
+        assert_eq!(
+            derive_lmdb_path(Path::new("data/mobile_sessions.json"), "fallback.lmdb"),
+            PathBuf::from("data/mobile_sessions.lmdb")
+        );
+        assert_eq!(
+            derive_lmdb_path(Path::new(""), "fallback.lmdb"),
+            PathBuf::from("fallback.lmdb")
+        );
+    }
 }

@@ -276,9 +276,9 @@ The service keeps small local operational state on disk:
 - admin supplier/customer state: generated codes, blocked/removed flags,
   assignment cache, and cooldown metadata, with `json` and `lmdb` backends.
 
-JSON remains the compatibility default during migration. LMDB-backed stores use
-the JSON files as legacy fallback input where applicable, so existing data can
-move gradually without changing the mobile API contract.
+LMDB is the production default for local state. JSON files are kept as explicit
+legacy stores and migration inputs, so existing data can move gradually without
+changing the mobile API contract.
 
 ### Push notifications
 
@@ -441,21 +441,22 @@ failure responses.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `MOBILE_API_ADDR` | `:8081` | Bind address. Leading `:8081` is normalized to `0.0.0.0:8081`. |
+| `MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK` | `0` | Set to `1` only for emergency rollback. When LMDB is selected and cannot open, the service fails fast by default instead of silently splitting state into JSON. |
 | `MOBILE_API_SESSION_STORE_PATH` | `data/mobile_sessions.json` | Persistent session store path. |
 | `MOBILE_API_SESSION_STORE` | fallback only | Legacy session store variable used when `MOBILE_API_SESSION_STORE_PATH` is absent. |
-| `MOBILE_API_SESSION_STORE_BACKEND` | `json` | Session backend: `json` or `lmdb`. JSON remains the compatibility default. |
+| `MOBILE_API_SESSION_STORE_BACKEND` | `lmdb` | Session backend: `lmdb` or `json`. LMDB is the production default. |
 | `MOBILE_API_SESSION_LMDB_PATH` | `data/mobile_sessions.lmdb` | LMDB environment directory when the LMDB session backend is enabled. |
 | `MOBILE_API_SESSION_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for session storage. |
 | `MOBILE_API_PROFILE_STORE_PATH` | `data/mobile_profile_prefs.json` | Profile preferences store path. |
-| `MOBILE_API_PROFILE_STORE_BACKEND` | `json` | Profile preferences backend: `json` or `lmdb`. JSON remains the compatibility default. |
+| `MOBILE_API_PROFILE_STORE_BACKEND` | `lmdb` | Profile preferences backend: `lmdb` or `json`. LMDB is the production default. |
 | `MOBILE_API_PROFILE_LMDB_PATH` | `data/mobile_profile_prefs.lmdb` | LMDB environment directory when the LMDB profile backend is enabled. |
 | `MOBILE_API_PROFILE_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for profile preference storage. |
 | `MOBILE_API_PUSH_TOKEN_STORE_PATH` | `data/mobile_push_tokens.json` | Push token store path. |
-| `MOBILE_API_PUSH_TOKEN_STORE_BACKEND` | `json` | Push token backend: `json` or `lmdb`. JSON remains the compatibility default. |
+| `MOBILE_API_PUSH_TOKEN_STORE_BACKEND` | `lmdb` | Push token backend: `lmdb` or `json`. LMDB is the production default. |
 | `MOBILE_API_PUSH_TOKEN_LMDB_PATH` | `data/mobile_push_tokens.lmdb` | LMDB environment directory when the LMDB push token backend is enabled. |
 | `MOBILE_API_PUSH_TOKEN_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for push token storage. |
 | `MOBILE_API_ADMIN_SUPPLIER_STORE_PATH` | `data/mobile_admin_suppliers.json` | Admin supplier/customer state store path. |
-| `MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND` | `json` | Admin supplier/customer state backend: `json` or `lmdb`. JSON remains the compatibility default. |
+| `MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND` | `lmdb` | Admin supplier/customer state backend: `lmdb` or `json`. LMDB is the production default. |
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH` | `data/mobile_admin_suppliers.lmdb` | LMDB environment directory when the LMDB admin state backend is enabled. |
 | `MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB` | `64` | LMDB map size for admin supplier/customer state storage. |
 | `MOBILE_API_SESSION_TTL_HOURS` | `720` | Bearer session TTL in hours. |
@@ -518,6 +519,7 @@ RUST_LOG=info,accord_mobile_server_rs=debug cargo run
 
 ```bash
 MOBILE_API_ADDR=:8081
+MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK=0
 
 ERP_URL=https://erp.example.com
 ERP_API_KEY=example-key
@@ -527,19 +529,19 @@ ERP_DEFAULT_UOM=Kg
 ERP_TIMEOUT_SECONDS=15
 
 MOBILE_API_SESSION_STORE_PATH=data/mobile_sessions.json
-MOBILE_API_SESSION_STORE_BACKEND=json
+MOBILE_API_SESSION_STORE_BACKEND=lmdb
 MOBILE_API_SESSION_LMDB_PATH=data/mobile_sessions.lmdb
 MOBILE_API_SESSION_LMDB_MAP_SIZE_MB=64
 MOBILE_API_PROFILE_STORE_PATH=data/mobile_profile_prefs.json
-MOBILE_API_PROFILE_STORE_BACKEND=json
+MOBILE_API_PROFILE_STORE_BACKEND=lmdb
 MOBILE_API_PROFILE_LMDB_PATH=data/mobile_profile_prefs.lmdb
 MOBILE_API_PROFILE_LMDB_MAP_SIZE_MB=64
 MOBILE_API_PUSH_TOKEN_STORE_PATH=data/mobile_push_tokens.json
-MOBILE_API_PUSH_TOKEN_STORE_BACKEND=json
+MOBILE_API_PUSH_TOKEN_STORE_BACKEND=lmdb
 MOBILE_API_PUSH_TOKEN_LMDB_PATH=data/mobile_push_tokens.lmdb
 MOBILE_API_PUSH_TOKEN_LMDB_MAP_SIZE_MB=64
 MOBILE_API_ADMIN_SUPPLIER_STORE_PATH=data/mobile_admin_suppliers.json
-MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND=json
+MOBILE_API_ADMIN_SUPPLIER_STORE_BACKEND=lmdb
 MOBILE_API_ADMIN_SUPPLIER_LMDB_PATH=data/mobile_admin_suppliers.lmdb
 MOBILE_API_ADMIN_SUPPLIER_LMDB_MAP_SIZE_MB=64
 MOBILE_API_SESSION_TTL_HOURS=720
