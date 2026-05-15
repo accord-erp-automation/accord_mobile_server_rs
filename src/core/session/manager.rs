@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore;
+use tokio::sync::RwLock;
 
 use crate::core::auth::models::Principal;
 use crate::core::session::models::SessionRecord;
@@ -14,6 +16,7 @@ use crate::error::AppError;
 pub struct SessionManager {
     store: Arc<dyn SessionStore>,
     ttl_seconds: Option<u64>,
+    cache: Arc<RwLock<HashMap<String, SessionRecord>>>,
 }
 
 impl SessionManager {
@@ -38,7 +41,11 @@ impl SessionManager {
     }
 
     pub fn with_store(store: Arc<dyn SessionStore>, ttl_seconds: Option<u64>) -> Self {
-        Self { store, ttl_seconds }
+        Self {
+            store,
+            ttl_seconds,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     #[allow(dead_code)]
@@ -46,11 +53,20 @@ impl SessionManager {
         let token = generate_token();
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, None, self.ttl_seconds);
-        self.store.put(&token, record).await?;
+        self.store.put(&token, record.clone()).await?;
+        self.cache.write().await.insert(token.clone(), record);
         Ok(token)
     }
 
     pub async fn get(&self, token: &str) -> Result<Principal, AppError> {
+        if let Some(record) = self.cache.read().await.get(token).cloned() {
+            if record.is_expired(time::OffsetDateTime::now_utc()) {
+                self.delete(token).await;
+                return Err(AppError::Unauthorized);
+            }
+            return Ok(record.principal);
+        }
+
         let Some(record) = self.store.get(token).await? else {
             return Err(AppError::Unauthorized);
         };
@@ -60,21 +76,31 @@ impl SessionManager {
             return Err(AppError::Unauthorized);
         }
 
-        Ok(record.principal)
+        let principal = record.principal.clone();
+        self.cache.write().await.insert(token.to_string(), record);
+        Ok(principal)
     }
 
     pub async fn delete(&self, token: &str) {
         let _ = self.store.delete(token).await;
+        self.cache.write().await.remove(token);
     }
 
     pub async fn update(&self, token: &str, principal: Principal) {
-        let Ok(Some(existing)) = self.store.get(token).await else {
+        let existing = if let Some(record) = self.cache.read().await.get(token).cloned() {
+            Some(record)
+        } else {
+            self.store.get(token).await.ok().flatten()
+        };
+        let Some(existing) = existing else {
             return;
         };
 
         let now = time::OffsetDateTime::now_utc();
         let record = SessionRecord::new(principal, now, existing.created_at, self.ttl_seconds);
-        let _ = self.store.put(token, record).await;
+        if self.store.put(token, record.clone()).await.is_ok() {
+            self.cache.write().await.insert(token.to_string(), record);
+        }
     }
 }
 

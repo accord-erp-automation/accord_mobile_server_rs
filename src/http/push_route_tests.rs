@@ -107,7 +107,7 @@ async fn push_token_registers_supplier_token_like_go() {
 #[tokio::test]
 async fn push_token_register_requires_body_token_like_go() {
     let mut state = test_state();
-    state.push = PushService::new(Arc::new(FailingReadPushStore));
+    state.push = PushService::new(Arc::new(FailingPushStore));
     let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
     let response = build_router(state)
         .oneshot(request(
@@ -124,9 +124,9 @@ async fn push_token_register_requires_body_token_like_go() {
 }
 
 #[tokio::test]
-async fn push_token_register_read_failure_uses_go_error() {
+async fn push_token_register_store_failure_uses_save_error() {
     let mut state = test_state();
-    state.push = PushService::new(Arc::new(FailingReadPushStore));
+    state.push = PushService::new(Arc::new(FailingPushStore));
     let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
     let response = build_router(state)
         .oneshot(request(
@@ -139,7 +139,7 @@ async fn push_token_register_read_failure_uses_go_error() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(json_body(response).await["error"], "push token read failed");
+    assert_eq!(json_body(response).await["error"], "push token save failed");
 }
 
 #[tokio::test]
@@ -156,9 +156,9 @@ async fn push_token_delete_requires_query_token_like_go() {
 }
 
 #[tokio::test]
-async fn push_token_delete_read_failure_uses_go_error() {
+async fn push_token_delete_store_failure_uses_delete_error() {
     let mut state = test_state();
-    state.push = PushService::new(Arc::new(FailingReadPushStore));
+    state.push = PushService::new(Arc::new(FailingPushStore));
     let token = session(&state, PrincipalRole::Supplier, "SUP-001").await;
     let response = build_router(state)
         .oneshot(request(
@@ -171,7 +171,10 @@ async fn push_token_delete_read_failure_uses_go_error() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(json_body(response).await["error"], "push token read failed");
+    assert_eq!(
+        json_body(response).await["error"],
+        "push token delete failed"
+    );
 }
 
 #[tokio::test]
@@ -225,21 +228,21 @@ fn unique_path() -> PathBuf {
     ))
 }
 
-struct FailingReadPushStore;
+struct FailingPushStore;
 
 #[async_trait]
-impl PushTokenStorePort for FailingReadPushStore {
+impl PushTokenStorePort for FailingPushStore {
     async fn move_token_to_key(
         &self,
         _target_key: &str,
         _token: &str,
         _platform: &str,
     ) -> Result<(), PushStoreError> {
-        Ok(())
+        Err(PushStoreError::StoreFailed)
     }
 
     async fn delete(&self, _key: &str, _token: &str) -> Result<(), PushStoreError> {
-        Ok(())
+        Err(PushStoreError::StoreFailed)
     }
 
     async fn list(&self, _key: &str) -> Result<Vec<PushTokenRecord>, PushStoreError> {

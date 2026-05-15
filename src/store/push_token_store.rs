@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use heed::types::{Bytes, Str};
@@ -109,7 +110,8 @@ pub struct LmdbPushTokenStore {
     records_db: Database<Str, PushTokenRecordsCodec>,
     owner_db: Database<Bytes, Str>,
     legacy_json_path: Option<PathBuf>,
-    legacy_migrated: Arc<Mutex<bool>>,
+    legacy_migrated: Arc<AtomicBool>,
+    legacy_migration_lock: Arc<Mutex<()>>,
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -203,18 +205,24 @@ impl LmdbPushTokenStore {
             records_db,
             owner_db,
             legacy_json_path,
-            legacy_migrated: Arc::new(Mutex::new(false)),
+            legacy_migrated: Arc::new(AtomicBool::new(false)),
+            legacy_migration_lock: Arc::new(Mutex::new(())),
             write_lock: Arc::new(Mutex::new(())),
         })
     }
 
     async fn migrate_legacy_if_needed(&self) -> Result<(), PushStoreError> {
-        let mut migrated = self.legacy_migrated.lock().await;
-        if *migrated {
+        if self.legacy_migrated.load(Ordering::Acquire) {
             return Ok(());
         }
+
+        let _migration_guard = self.legacy_migration_lock.lock().await;
+        if self.legacy_migrated.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
         let Some(path) = &self.legacy_json_path else {
-            *migrated = true;
+            self.legacy_migrated.store(true, Ordering::Release);
             return Ok(());
         };
 
@@ -222,7 +230,7 @@ impl LmdbPushTokenStore {
             .await
             .map_err(|_| PushStoreError::StoreFailed)?;
         if data.is_empty() {
-            *migrated = true;
+            self.legacy_migrated.store(true, Ordering::Release);
             return Ok(());
         }
 
@@ -242,7 +250,7 @@ impl LmdbPushTokenStore {
             }
         }
         wtxn.commit().map_err(lmdb_store_error)?;
-        *migrated = true;
+        self.legacy_migrated.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -322,6 +330,9 @@ impl PushTokenStorePort for LmdbPushTokenStore {
         };
 
         let _guard = self.write_lock.lock().await;
+        if self.token_already_registered(target_key, token, &record.platform)? {
+            return Ok(());
+        }
         let mut wtxn = self.env.write_txn().map_err(lmdb_store_error)?;
         self.move_record_to_key_in_txn(&mut wtxn, target_key, record)?;
         wtxn.commit().map_err(lmdb_store_error)
@@ -357,6 +368,34 @@ impl PushTokenStorePort for LmdbPushTokenStore {
             .get(&rtxn, key.trim())
             .map_err(lmdb_store_error)?
             .unwrap_or_default())
+    }
+}
+
+impl LmdbPushTokenStore {
+    fn token_already_registered(
+        &self,
+        target_key: &str,
+        token: &str,
+        platform: &str,
+    ) -> Result<bool, PushStoreError> {
+        let token_key = push_token_hash(token);
+        let rtxn = self.env.read_txn().map_err(lmdb_store_error)?;
+        if self
+            .owner_db
+            .get(&rtxn, &token_key)
+            .map_err(lmdb_store_error)?
+            .is_none_or(|owner| owner != target_key)
+        {
+            return Ok(false);
+        }
+
+        Ok(self
+            .records_db
+            .get(&rtxn, target_key)
+            .map_err(lmdb_store_error)?
+            .unwrap_or_default()
+            .iter()
+            .any(|record| record.token.trim() == token && record.platform.trim() == platform))
     }
 }
 
@@ -430,6 +469,51 @@ mod tests {
         assert_eq!(werka.len(), 1);
         assert_eq!(werka[0].token, "shared");
         assert_eq!(werka[0].platform, "android");
+    }
+
+    #[tokio::test]
+    async fn lmdb_push_token_store_duplicate_register_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LmdbPushTokenStore::open(dir.path().join("push.lmdb"), 1024 * 1024, None)
+            .expect("lmdb push store");
+
+        store
+            .move_token_to_key("werka:werka", "device-a", "android")
+            .await
+            .expect("register");
+        let first = store.list("werka:werka").await.expect("first list");
+
+        store
+            .move_token_to_key("werka:werka", "device-a", "android")
+            .await
+            .expect("register duplicate");
+        let duplicate = store.list("werka:werka").await.expect("duplicate list");
+
+        assert_eq!(duplicate.len(), 1);
+        assert_eq!(duplicate[0].token, "device-a");
+        assert_eq!(duplicate[0].platform, "android");
+        assert_eq!(duplicate[0].updated_at, first[0].updated_at);
+    }
+
+    #[tokio::test]
+    async fn lmdb_push_token_store_duplicate_register_updates_changed_platform() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = LmdbPushTokenStore::open(dir.path().join("push.lmdb"), 1024 * 1024, None)
+            .expect("lmdb push store");
+
+        store
+            .move_token_to_key("werka:werka", "device-a", "ios")
+            .await
+            .expect("register");
+        store
+            .move_token_to_key("werka:werka", "device-a", "android")
+            .await
+            .expect("update platform");
+
+        let records = store.list("werka:werka").await.expect("list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].token, "device-a");
+        assert_eq!(records[0].platform, "android");
     }
 
     #[tokio::test]
