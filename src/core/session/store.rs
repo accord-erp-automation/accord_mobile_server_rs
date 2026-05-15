@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use heed::types::Bytes;
+use heed::types::{Bytes, Unit};
 use heed::{BoxedError, BytesDecode, BytesEncode, Database, Env, EnvOpenOptions};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -103,6 +103,7 @@ impl SessionStore for JsonSessionStore {
 pub struct LmdbSessionStore {
     env: Env,
     db: Database<Bytes, SessionRecordCodec>,
+    expires_db: Database<ExpiryKeyCodec, Unit>,
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -239,11 +240,15 @@ impl LmdbSessionStore {
         let db = env
             .create_database(&mut wtxn, Some("sessions"))
             .map_err(lmdb_error)?;
+        let expires_db = env
+            .create_database(&mut wtxn, Some("session_expiry"))
+            .map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)?;
 
         Ok(Self {
             env,
             db,
+            expires_db,
             write_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -278,7 +283,12 @@ impl SessionStore for LmdbSessionStore {
         let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
+        self.purge_expired_in_txn(&mut wtxn, OffsetDateTime::now_utc())?;
+        if let Some(previous) = self.db.get(&wtxn, &key).map_err(lmdb_error)? {
+            self.delete_expiry_index(&mut wtxn, &key, &previous)?;
+        }
         self.db.put(&mut wtxn, &key, &record).map_err(lmdb_error)?;
+        self.put_expiry_index(&mut wtxn, &key, &record)?;
         wtxn.commit().map_err(lmdb_error)
     }
 
@@ -286,6 +296,9 @@ impl SessionStore for LmdbSessionStore {
         let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
+        if let Some(previous) = self.db.get(&wtxn, &key).map_err(lmdb_error)? {
+            self.delete_expiry_index(&mut wtxn, &key, &previous)?;
+        }
         self.db.delete(&mut wtxn, &key).map_err(lmdb_error)?;
         self.db
             .delete(&mut wtxn, token.as_bytes())
@@ -303,10 +316,118 @@ impl LmdbSessionStore {
             .map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)
     }
+
+    fn put_expiry_index(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        session_key: &[u8; 32],
+        record: &SessionRecord,
+    ) -> Result<(), AppError> {
+        if let Some(expires_at) = record.expires_at {
+            let key = ExpiryKey::new(expires_at, *session_key);
+            self.expires_db.put(wtxn, &key, &()).map_err(lmdb_error)?;
+        }
+        Ok(())
+    }
+
+    fn delete_expiry_index(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        session_key: &[u8; 32],
+        record: &SessionRecord,
+    ) -> Result<(), AppError> {
+        if let Some(expires_at) = record.expires_at {
+            let key = ExpiryKey::new(expires_at, *session_key);
+            self.expires_db.delete(wtxn, &key).map_err(lmdb_error)?;
+        }
+        Ok(())
+    }
+
+    fn purge_expired_in_txn(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        now: OffsetDateTime,
+    ) -> Result<usize, AppError> {
+        let upper = ExpiryKey::new(now, [u8::MAX; 32]);
+        let expired = {
+            let mut iter = self
+                .expires_db
+                .range(&*wtxn, &(..=upper))
+                .map_err(lmdb_error)?;
+            let mut keys = Vec::new();
+            while let Some((key, ())) = iter.next().transpose().map_err(lmdb_error)? {
+                keys.push(key);
+            }
+            keys
+        };
+
+        for key in &expired {
+            self.db.delete(wtxn, &key.session_key).map_err(lmdb_error)?;
+            self.expires_db.delete(wtxn, key).map_err(lmdb_error)?;
+        }
+
+        Ok(expired.len())
+    }
 }
 
 fn session_key(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExpiryKey {
+    expires_at_nanos: i128,
+    session_key: [u8; 32],
+}
+
+impl ExpiryKey {
+    fn new(expires_at: OffsetDateTime, session_key: [u8; 32]) -> Self {
+        Self {
+            expires_at_nanos: expires_at.unix_timestamp_nanos(),
+            session_key,
+        }
+    }
+}
+
+struct ExpiryKeyCodec;
+
+impl<'a> BytesEncode<'a> for ExpiryKeyCodec {
+    type EItem = ExpiryKey;
+
+    fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, BoxedError> {
+        let mut bytes = Vec::with_capacity(48);
+        bytes.extend_from_slice(&encode_ordered_i128(item.expires_at_nanos));
+        bytes.extend_from_slice(&item.session_key);
+        Ok(Cow::Owned(bytes))
+    }
+}
+
+impl<'a> BytesDecode<'a> for ExpiryKeyCodec {
+    type DItem = ExpiryKey;
+
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        let expires_at = bytes
+            .get(..16)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(decode_ordered_i128)
+            .ok_or("invalid expiry key timestamp")?;
+        let session_key = bytes
+            .get(16..48)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or("invalid expiry key session hash")?;
+        Ok(ExpiryKey {
+            expires_at_nanos: expires_at,
+            session_key,
+        })
+    }
+}
+
+fn encode_ordered_i128(value: i128) -> [u8; 16] {
+    ((value as u128) ^ (1_u128 << 127)).to_be_bytes()
+}
+
+fn decode_ordered_i128(bytes: [u8; 16]) -> i128 {
+    (u128::from_be_bytes(bytes) ^ (1_u128 << 127)) as i128
 }
 
 fn lmdb_error(error: heed::Error) -> AppError {
@@ -314,97 +435,5 @@ fn lmdb_error(error: heed::Error) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        BytesDecode, BytesEncode, LmdbSessionStore, SessionRecordCodec, SessionStore, session_key,
-    };
-    use crate::core::auth::models::{Principal, PrincipalRole};
-    use crate::core::session::models::SessionRecord;
-    use heed::types::Bytes;
-    use heed::{Database, EnvOpenOptions};
-
-    #[tokio::test]
-    async fn lmdb_get_migrates_legacy_raw_token_key() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = LmdbSessionStore::open(dir.path().join("sessions.lmdb"), 1024 * 1024)
-            .expect("lmdb store");
-        let token = "legacy-token";
-        let record = SessionRecord::new(principal(), time::OffsetDateTime::now_utc(), None, None);
-
-        {
-            let mut wtxn = store.env.write_txn().expect("write txn");
-            store
-                .db
-                .put(&mut wtxn, token.as_bytes(), &record)
-                .expect("put legacy session");
-            wtxn.commit().expect("commit legacy session");
-        }
-
-        let loaded = store.get(token).await.expect("get migrated session");
-        assert_eq!(loaded.expect("session").principal.ref_, "admin");
-
-        let key = session_key(token);
-        let rtxn = store.env.read_txn().expect("read txn");
-        assert!(
-            store
-                .db
-                .get(&rtxn, token.as_bytes())
-                .expect("legacy key")
-                .is_none()
-        );
-        assert!(store.db.get(&rtxn, &key).expect("hashed key").is_some());
-    }
-
-    #[test]
-    fn session_record_codec_round_trips_binary() {
-        let record = SessionRecord::new(principal(), time::OffsetDateTime::now_utc(), None, None);
-        let bytes = SessionRecordCodec::bytes_encode(&record).expect("encode record");
-        let decoded = SessionRecordCodec::bytes_decode(&bytes).expect("decode record");
-
-        assert_eq!(decoded.principal.ref_, "admin");
-        assert_eq!(decoded.created_at, record.created_at);
-    }
-
-    #[tokio::test]
-    async fn lmdb_reads_legacy_json_session_values() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("sessions.lmdb");
-        let token = "json-token";
-        let key = session_key(token);
-        let record = SessionRecord::new(principal(), time::OffsetDateTime::now_utc(), None, None);
-
-        {
-            std::fs::create_dir_all(&path).expect("create lmdb dir");
-            let env = unsafe {
-                EnvOpenOptions::new()
-                    .map_size(1024 * 1024)
-                    .max_dbs(2)
-                    .open(&path)
-            }
-            .expect("legacy env");
-            let mut wtxn = env.write_txn().expect("legacy write txn");
-            let db: Database<Bytes, Bytes> = env
-                .create_database(&mut wtxn, Some("sessions"))
-                .expect("legacy db");
-            let json = serde_json::to_vec(&record).expect("legacy json");
-            db.put(&mut wtxn, &key, &json).expect("put legacy json");
-            wtxn.commit().expect("commit legacy json");
-        }
-
-        let store = LmdbSessionStore::open(path, 1024 * 1024).expect("lmdb store");
-        let loaded = store.get(token).await.expect("read json session");
-
-        assert_eq!(loaded.expect("session").principal.ref_, "admin");
-    }
-
-    fn principal() -> Principal {
-        Principal {
-            role: PrincipalRole::Admin,
-            display_name: "Admin".to_string(),
-            legal_name: "Admin".to_string(),
-            ref_: "admin".to_string(),
-            phone: "+998880000000".to_string(),
-            avatar_url: String::new(),
-        }
-    }
-}
+#[path = "store_tests.rs"]
+mod tests;
