@@ -20,7 +20,9 @@ use hyper_util::service::TowerToHyperService;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<(), error::AppError> {
@@ -67,7 +69,14 @@ async fn serve_listener(
     worker: usize,
 ) -> Result<(), error::AppError> {
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                tracing::warn!(%error, worker, "failed to accept connection");
+                sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
         if let Err(error) = stream.set_nodelay(true) {
             tracing::trace!(%error, %peer_addr, worker, "failed to enable TCP_NODELAY");
         }
