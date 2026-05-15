@@ -130,9 +130,9 @@ mod tests {
     #[tokio::test]
     async fn lmdb_store_round_trips_session() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let lmdb_path = dir.path().join("sessions.lmdb");
         let sessions =
-            SessionManager::lmdb(dir.path().join("sessions.lmdb"), 1024 * 1024, Some(60))
-                .expect("lmdb sessions");
+            SessionManager::lmdb(lmdb_path.clone(), 1024 * 1024, Some(60)).expect("lmdb sessions");
         let token = sessions
             .create(Principal {
                 role: PrincipalRole::Admin,
@@ -148,7 +148,16 @@ mod tests {
         let principal = sessions.get(&token).await.expect("get session");
         assert_eq!(principal.ref_, "admin");
 
+        let data_file = std::fs::read(lmdb_path.join("data.mdb")).expect("read lmdb data file");
+        assert!(!contains_bytes(&data_file, token.as_bytes()));
+
         sessions.delete(&token).await;
         assert!(sessions.get(&token).await.is_err());
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 }

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use heed::types::{SerdeJson, Str};
+use heed::types::{Bytes, SerdeJson};
 use heed::{Database, Env, EnvOpenOptions};
+use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::core::session::models::SessionRecord;
@@ -97,7 +98,7 @@ impl SessionStore for JsonSessionStore {
 
 pub struct LmdbSessionStore {
     env: Env,
-    db: Database<Str, SerdeJson<SessionRecord>>,
+    db: Database<Bytes, SerdeJson<SessionRecord>>,
     write_lock: Arc<Mutex<()>>,
 }
 
@@ -131,23 +132,30 @@ impl LmdbSessionStore {
 #[async_trait]
 impl SessionStore for LmdbSessionStore {
     async fn get(&self, token: &str) -> Result<Option<SessionRecord>, AppError> {
+        let key = session_key(token);
         let rtxn = self.env.read_txn().map_err(lmdb_error)?;
-        self.db.get(&rtxn, token).map_err(lmdb_error)
+        self.db.get(&rtxn, &key).map_err(lmdb_error)
     }
 
     async fn put(&self, token: &str, record: SessionRecord) -> Result<(), AppError> {
+        let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
-        self.db.put(&mut wtxn, token, &record).map_err(lmdb_error)?;
+        self.db.put(&mut wtxn, &key, &record).map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)
     }
 
     async fn delete(&self, token: &str) -> Result<(), AppError> {
+        let key = session_key(token);
         let _guard = self.write_lock.lock().await;
         let mut wtxn = self.env.write_txn().map_err(lmdb_error)?;
-        self.db.delete(&mut wtxn, token).map_err(lmdb_error)?;
+        self.db.delete(&mut wtxn, &key).map_err(lmdb_error)?;
         wtxn.commit().map_err(lmdb_error)
     }
+}
+
+fn session_key(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
 }
 
 fn lmdb_error(error: heed::Error) -> AppError {
