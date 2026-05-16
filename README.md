@@ -32,23 +32,57 @@ Configure real `.env` values before production use. At minimum set `ERP_URL`,
 
 ## Performance Validation
 
-On 2026-05-14, this Rust service was benchmarked side-by-side against the legacy
-Go service on the same `fedora` server, using copied runtime state and read-only
-mobile endpoints. All smoke/load checks returned `200` with zero ApacheBench
-failures. Rust showed lower latency on most tested read-heavy routes, especially
-admin item and item group reads.
+The current production candidate was validated on 2026-05-15 after the LMDB
+local-state migration, SQL pushdown work, HTTP/healthz tuning, Hyper HTTP/1
+accept-loop tuning, and FD-pressure fix.
 
-Full benchmark notes are available in
-[docs/benchmarks/2026-05-14-go-vs-rust.md](docs/benchmarks/2026-05-14-go-vs-rust.md).
+Key results from the final Go vs Rust production benchmark:
 
-For the current performance state, restored ERPNext setup, completed
-optimizations, benchmark results, hard constraints, and next work, see
-[AI_HANDOFF_PERFORMANCE.md](AI_HANDOFF_PERFORMANCE.md).
+| Case | Rust | Go | Result |
+| --- | ---: | ---: | --- |
+| `admin_login_5k_100` | `5313.61 RPS`, p95 `28ms` | `36.52 RPS`, p95 `5106ms` | Rust much faster |
+| `push_fixed_5k_100` | `5847.71 RPS`, p95 `21ms` | `500.24 RPS`, p95 `44ms` | Rust much faster |
+| `read_summary_3k_100` | `2488.98 RPS`, p95 `55ms` | `2712.03 RPS`, p95 `73ms` | Go slightly higher RPS, Rust lower p95 |
+| `read_home_3k_100` | `735.85 RPS`, p95 `194ms` | `662.19 RPS`, p95 `340ms` | Rust faster |
+| `crash_health_60k_1000` | `5819.38 RPS`, `0` failed | `5515.64 RPS`, `0` failed | Rust stable |
+| `crash_push_20k_500` | `5152.66 RPS`, `0` failed | `3726.97 RPS`, `0` failed | Rust stable |
+
+The production service stayed healthy after the run with `{"ok":true}`,
+`NRestarts=0`, and `LimitNOFILE=65535`. Rust is ready as the primary Accord
+mobile backend for this workload.
+
+Important benchmark notes:
+
+- LMDB is now the production default for session, profile, push token, and
+  admin local state.
+- Session tokens are stored as `SHA-256(token)` keys, with versioned binary
+  values and an LMDB expiry index.
+- JSON local stores are legacy migration/rollback inputs, not the default
+  production path.
+- Rust session-heavy workloads are about `88x-90x` faster than the legacy Go
+  JSON session store in the measured login benchmarks.
+- SQL pushdown is used where it preserves the exact mobile result shape and
+  reduces Rust-side row aggregation.
+- Mutation endpoints still write through ERPNext REST; direct DB access remains
+  read-only.
+
+Full benchmark notes:
+
+- [docs/benchmarks/2026-05-15-final-go-vs-rust-production-battle.md](docs/benchmarks/2026-05-15-final-go-vs-rust-production-battle.md)
+- [docs/benchmarks/2026-05-15-go-vs-rust-lmdb-default-battle.md](docs/benchmarks/2026-05-15-go-vs-rust-lmdb-default-battle.md)
+- [docs/benchmarks/2026-05-15-go-vs-rust-lmdb-v2-stress.md](docs/benchmarks/2026-05-15-go-vs-rust-lmdb-v2-stress.md)
+- [docs/benchmarks/2026-05-15-session-store-lmdb.md](docs/benchmarks/2026-05-15-session-store-lmdb.md)
+- [docs/benchmarks/2026-05-15-sql-pushdown.md](docs/benchmarks/2026-05-15-sql-pushdown.md)
+- [docs/benchmarks/2026-05-15-healthz-tuning.md](docs/benchmarks/2026-05-15-healthz-tuning.md)
+- [docs/benchmarks/2026-05-15-hyper-http1-tuning.md](docs/benchmarks/2026-05-15-hyper-http1-tuning.md)
+
+For the current handoff state, restored ERPNext setup, hard constraints, and
+next work, see [AI_HANDOFF_PERFORMANCE.md](AI_HANDOFF_PERFORMANCE.md).
 
 `accord_mobile_server_rs` is an independent Rust service for the Accord mobile
 backend. It is a standalone Axum/Tokio application that speaks directly to the
 mobile clients, ERPNext, the ERPNext MariaDB database when direct reads are
-enabled, Firebase Cloud Messaging, Gemini Vision, and local JSON-backed state
+enabled, Firebase Cloud Messaging, Gemini Vision, and LMDB-backed local state
 stores.
 
 This repository is not a wrapper around the Go service, does not shell out to
@@ -89,7 +123,7 @@ flowchart TB
 
     ERPNext[ERPNext REST API<br/>Supplier, Customer, Item,<br/>Purchase Receipt, Delivery Note,<br/>Comment, File]
     MariaDB[ERPNext MariaDB direct reads<br/>fast read models and search]
-    LocalState[Local state stores<br/>LMDB-ready sessions/profile prefs/push tokens/admin state]
+    LocalState[Local state stores<br/>LMDB sessions/profile prefs/push tokens/admin state]
     FCM[Firebase Cloud Messaging<br/>HTTP v1]
     Gemini[Gemini Vision<br/>Werka AI search]
     Env[.env runtime persistence<br/>admin settings updates]
@@ -114,7 +148,7 @@ sequenceDiagram
     participant Router as Axum router
     participant Handler as HTTP handler
     participant Domain as Core service
-    participant Store as Session/JSON store
+    participant Store as Session/local store
     participant DB as Direct DB reader
     participant ERP as ERPNext REST
     participant Push as FCM sender
@@ -279,6 +313,11 @@ The service keeps small local operational state on disk:
 LMDB is the production default for local state. JSON files are kept as explicit
 legacy stores and migration inputs, so existing data can move gradually without
 changing the mobile API contract.
+
+The production path is fail-fast by default: if an LMDB backend is selected and
+cannot open, the service does not silently split state into JSON unless
+`MOBILE_API_LOCAL_STORE_ALLOW_JSON_FALLBACK=1` is explicitly set for emergency
+rollback.
 
 ### Push notifications
 
@@ -639,9 +678,9 @@ The test suite covers:
 
 ### Session lifecycle
 
-Sessions are bearer tokens stored through `SessionManager`. Tokens are persisted
-to the configured session JSON path and expire according to
-`MOBILE_API_SESSION_TTL_HOURS`.
+Sessions are bearer tokens stored through `SessionManager`. The production
+backend is LMDB, with JSON kept for legacy migration and explicit rollback.
+Sessions expire according to `MOBILE_API_SESSION_TTL_HOURS`.
 
 ### Admin settings persistence
 
@@ -694,7 +733,7 @@ src/
   erpdb/              Direct MariaDB read models.
   erpnext/            ERPNext REST adapters.
   http/               Axum router, handlers, route tests, PDF generator.
-  store/              JSON-backed state stores.
+  store/              JSON and LMDB-backed local state stores.
   fcm.rs              Firebase Cloud Messaging HTTP v1 sender.
   main.rs             Process entrypoint.
 ```
@@ -705,7 +744,9 @@ src/
   documents through REST.
 - Enable direct DB reads only when the service can access the ERPNext MariaDB
   host and the correct `site_config.json`.
-- Keep JSON store paths on persistent storage in production.
+- Keep LMDB store directories on persistent storage in production.
+- Keep JSON store paths only when legacy migration or emergency rollback is
+  required.
 - Keep Firebase service account JSON outside the repository and pass its path
   through `FCM_SERVICE_ACCOUNT_PATH`.
 - Use `RUST_LOG=info` or more specific module filters during smoke tests.
@@ -715,10 +756,11 @@ src/
 ## Compatibility Status
 
 The current implementation registers the full mobile route surface and has
-focused route/domain tests for the mobile API contract. Real ERP smoke testing
-should still be performed with production-like ERPNext data before switching a
-live mobile client to this service. That smoke test should verify both HTTP
-responses and ERPNext document side effects.
+focused route/domain tests for the mobile API contract. Production-like ERPNext
+benchmarking and smoke testing have been performed for the main read/write hot
+paths. Before switching a new live ERPNext company to this service, repeat the
+smoke test against that company's data and verify both HTTP responses and
+ERPNext document side effects.
 
 Recommended smoke-test order:
 
