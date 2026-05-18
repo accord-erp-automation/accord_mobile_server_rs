@@ -5,7 +5,7 @@ use super::models::{
     CreateMaterialReceiptDraftInput, MaterialReceiptPrintRequest, MaterialReceiptPrintResponse,
     ScaleDriverPrintRequest, ScaleDriverPrintResponse,
 };
-use super::ports::{EpcSource, GscalePortError, MaterialReceiptErpPort, ScaleDriverPort};
+use super::ports::{EpcSource, MaterialReceiptErpPort, ScaleDriverPort};
 
 const MIN_BATCH_QTY_KG: f64 = 0.100;
 const MAX_DUPLICATE_BARCODE_RETRIES: usize = 5;

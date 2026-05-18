@@ -5,6 +5,7 @@ use async_trait::async_trait;
 
 use super::*;
 use crate::core::gscale::models::{MaterialReceiptDraft, ScaleDriverPrintResponse};
+use crate::core::gscale::ports::GscalePortError;
 
 fn request() -> MaterialReceiptPrintRequest {
     MaterialReceiptPrintRequest {
