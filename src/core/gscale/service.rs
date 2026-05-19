@@ -10,6 +10,7 @@ use super::models::{
 use super::ports::{EpcSource, MaterialReceiptErpPort, ScaleDriverPort};
 
 const MIN_BATCH_QTY_KG: f64 = 0.100;
+pub type LateMaterialReceiptErrorHandler = Arc<dyn Fn(String) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct GscaleService {
@@ -53,6 +54,15 @@ impl GscaleService {
         &self,
         request: MaterialReceiptPrintRequest,
     ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
+        self.print_material_receipt_driver_first_with_late_error(request, None)
+            .await
+    }
+
+    pub async fn print_material_receipt_driver_first_with_late_error(
+        &self,
+        request: MaterialReceiptPrintRequest,
+        late_error: Option<LateMaterialReceiptErrorHandler>,
+    ) -> Result<MaterialReceiptPrintResponse, GscaleServiceError> {
         let erp = self.erp.as_ref().ok_or_else(|| {
             GscaleServiceError::NotConfigured("material receipt erp is not configured".to_string())
         })?;
@@ -67,6 +77,7 @@ impl GscaleService {
             job.clone(),
             epc.clone(),
             print_result_rx,
+            late_error,
         ));
         let print = driver
             .print_material_receipt(job.driver_request(&epc))
@@ -121,10 +132,14 @@ async fn record_parallel_material_receipt(
     job: NormalizedMaterialReceiptJob,
     epc: String,
     print_result_rx: oneshot::Receiver<bool>,
+    late_error: Option<LateMaterialReceiptErrorHandler>,
 ) {
     if let Err(error) = record_parallel_material_receipt_inner(erp, job, epc, print_result_rx).await
     {
         tracing::warn!(%error, "RPS batch ERP record failed after driver print");
+        if let Some(handler) = late_error {
+            handler(error.to_string());
+        }
     }
 }
 
@@ -144,7 +159,7 @@ async fn record_parallel_material_receipt_inner(
     }
     erp.submit_stock_entry_draft(&draft.name)
         .await
-        .map_err(|error| GscaleServiceError::SubmitFailed(error.message()))
+        .map_err(|error| GscaleServiceError::SubmitFailed(clean_erp_error(&error.message())))
 }
 
 async fn create_material_receipt_draft(
@@ -286,6 +301,14 @@ fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {
         }
     }
     "print failed".to_string()
+}
+
+fn clean_erp_error(message: &str) -> String {
+    message
+        .trim()
+        .strip_prefix("erp write failed: ")
+        .unwrap_or_else(|| message.trim())
+        .to_string()
 }
 
 fn blank_default(value: &str, fallback: &str) -> String {

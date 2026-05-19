@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use heed::types::Bytes;
 use heed::{BoxedError, BytesDecode, BytesEncode, Database, Env, EnvOpenOptions};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use super::models::RpsBatchSession;
@@ -38,9 +39,58 @@ impl<'a> BytesDecode<'a> for RpsBatchSessionCodec {
 
     fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
         if let Some(payload) = bytes.strip_prefix(RPS_BATCH_MAGIC) {
-            return Ok(bincode::deserialize(payload)?);
+            return Ok(match bincode::deserialize(payload) {
+                Ok(batch) => batch,
+                Err(_) => bincode::deserialize::<RpsBatchSessionV1>(payload)?.into(),
+            });
         }
         Ok(serde_json::from_slice(bytes)?)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RpsBatchSessionV1 {
+    id: String,
+    active: bool,
+    owner_key: String,
+    owner_role: String,
+    owner_ref: String,
+    driver_url: String,
+    item_code: String,
+    item_name: String,
+    warehouse: String,
+    printer: String,
+    print_mode: String,
+    quantity_source: String,
+    manual_qty_kg: f64,
+    tare_enabled: bool,
+    tare_kg: f64,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<RpsBatchSessionV1> for RpsBatchSession {
+    fn from(batch: RpsBatchSessionV1) -> Self {
+        Self {
+            id: batch.id,
+            active: batch.active,
+            owner_key: batch.owner_key,
+            owner_role: batch.owner_role,
+            owner_ref: batch.owner_ref,
+            driver_url: batch.driver_url,
+            item_code: batch.item_code,
+            item_name: batch.item_name,
+            warehouse: batch.warehouse,
+            printer: batch.printer,
+            print_mode: batch.print_mode,
+            quantity_source: batch.quantity_source,
+            manual_qty_kg: batch.manual_qty_kg,
+            tare_enabled: batch.tare_enabled,
+            tare_kg: batch.tare_kg,
+            created_at: batch.created_at,
+            updated_at: batch.updated_at,
+            ..RpsBatchSession::default()
+        }
     }
 }
 

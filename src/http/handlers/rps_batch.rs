@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -87,9 +89,23 @@ pub async fn print(
         .material_receipt_request(&principal, request)
         .await
         .map_err(batch_error)?;
+    let batch_service = state.rps_batch.clone();
+    let batch_principal = principal.clone();
+    let late_error = Arc::new(move |detail: String| {
+        let batch_service = batch_service.clone();
+        let batch_principal = batch_principal.clone();
+        tokio::spawn(async move {
+            if let Err(error) = batch_service
+                .record_late_error(&batch_principal, detail)
+                .await
+            {
+                tracing::warn!(%error, "failed to record late RPS ERP error");
+            }
+        });
+    });
     let response = state
         .gscale
-        .print_material_receipt_driver_first(material_request)
+        .print_material_receipt_driver_first_with_late_error(material_request, Some(late_error))
         .await
         .map_err(gscale_error)?;
     Ok(Json(

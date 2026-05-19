@@ -192,6 +192,7 @@ async fn rps_batch_print_uses_active_rs_batch_and_transaction_flow() {
         .expect("start response");
 
     let printed = router
+        .clone()
         .oneshot(request(
             "POST",
             "/v1/mobile/rps/batch/print",
@@ -253,6 +254,7 @@ async fn rps_batch_print_returns_after_driver_without_waiting_for_erp_submit() {
 
     let started_at = Instant::now();
     let printed = router
+        .clone()
         .oneshot(request(
             "POST",
             "/v1/mobile/rps/batch/print",
@@ -317,6 +319,7 @@ async fn rps_batch_print_returns_printed_before_late_erp_failure() {
     assert_eq!(json_body(started).await["ok"], true);
 
     let printed = router
+        .clone()
         .oneshot(request(
             "POST",
             "/v1/mobile/rps/batch/print",
@@ -338,6 +341,24 @@ async fn rps_batch_print_returns_printed_before_late_erp_failure() {
     assert_eq!(
         events.lock().unwrap().as_slice(),
         ["print", "create:2.500", "submit:MAT-STE-ROUTE"]
+    );
+
+    let state = router
+        .oneshot(request("GET", "/v1/mobile/rps/batch/state", &token, ""))
+        .await
+        .expect("state response");
+    let body = json_body(state).await;
+
+    assert_eq!(body["batch"]["active"], true);
+    assert_eq!(
+        body["batch"]["last_error"],
+        "submit failed: NegativeStockError: insufficient stock"
+    );
+    assert!(
+        body["batch"]["last_error_at"]
+            .as_str()
+            .unwrap_or("")
+            .contains('T')
     );
 }
 

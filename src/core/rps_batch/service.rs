@@ -60,6 +60,22 @@ impl RpsBatchService {
         Ok(RpsBatchResponse::new(batch))
     }
 
+    pub async fn record_late_error(
+        &self,
+        principal: &Principal,
+        detail: impl Into<String>,
+    ) -> Result<(), RpsBatchServiceError> {
+        let owner = BatchOwner::from_principal(principal);
+        let Some(mut batch) = self.store.get(&owner.key).await? else {
+            return Ok(());
+        };
+        batch.last_error = detail.into();
+        batch.last_error_at = now_string();
+        batch.updated_at = batch.last_error_at.clone();
+        self.store.put(batch).await?;
+        Ok(())
+    }
+
     pub async fn material_receipt_request(
         &self,
         principal: &Principal,
@@ -128,6 +144,8 @@ fn normalize_start(
         manual_qty_kg: positive_or_zero(request.manual_qty_kg),
         tare_enabled: request.tare_enabled || request.tare_kg > 0.0,
         tare_kg: positive_or_zero(request.tare_kg),
+        last_error: String::new(),
+        last_error_at: String::new(),
         created_at: now.clone(),
         updated_at: now,
     })

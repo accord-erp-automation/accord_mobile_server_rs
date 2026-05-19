@@ -45,6 +45,10 @@ pub struct RpsBatchSession {
     pub manual_qty_kg: f64,
     pub tare_enabled: bool,
     pub tare_kg: f64,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub last_error_at: String,
     pub created_at: String,
     pub updated_at: String,
 }
