@@ -20,7 +20,7 @@ pub async fn settings(
     }
     match method {
         Method::GET => {
-            require_capability(&principal, Capability::AdminSettingsRead)?;
+            require_capability(&state, &principal, Capability::AdminSettingsRead).await?;
             state
                 .admin
                 .settings()
@@ -29,7 +29,7 @@ pub async fn settings(
                 .map_err(|_| server_error("settings fetch failed"))
         }
         Method::PUT => {
-            require_capability(&principal, Capability::AdminSettingsManage)?;
+            require_capability(&state, &principal, Capability::AdminSettingsManage).await?;
             let input: AdminSettings = parse_json(&body)?;
             state
                 .admin
@@ -62,7 +62,7 @@ pub async fn suppliers(
     }
     match method {
         Method::GET => {
-            require_capability(&principal, Capability::SupplierDirectoryRead)?;
+            require_capability(&state, &principal, Capability::SupplierDirectoryRead).await?;
             let summary = state
                 .admin
                 .supplier_summary(300)
@@ -87,7 +87,7 @@ pub async fn suppliers(
             }))
         }
         Method::POST => {
-            require_capability(&principal, Capability::SupplierDirectoryManage)?;
+            require_capability(&state, &principal, Capability::SupplierDirectoryManage).await?;
             let input: AdminCreateSupplierRequest = parse_json(&body)?;
             state
                 .admin

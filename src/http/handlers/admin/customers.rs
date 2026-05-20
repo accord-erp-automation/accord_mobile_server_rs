@@ -20,7 +20,7 @@ pub async fn customers(
     }
     match method {
         Method::GET => {
-            require_capability(&principal, Capability::CustomerDirectoryRead)?;
+            require_capability(&state, &principal, Capability::CustomerDirectoryRead).await?;
             state
                 .admin
                 .customers(500)
@@ -29,7 +29,7 @@ pub async fn customers(
                 .map_err(|_| server_error("customers fetch failed"))
         }
         Method::POST => {
-            require_capability(&principal, Capability::CustomerDirectoryManage)?;
+            require_capability(&state, &principal, Capability::CustomerDirectoryManage).await?;
             let input: AdminCreateCustomerRequest = parse_json(&body)?;
             state
                 .admin
@@ -100,7 +100,7 @@ pub async fn items(
     }
     match method {
         Method::GET => {
-            require_capability(&principal, Capability::CatalogItemRead)?;
+            require_capability(&state, &principal, Capability::CatalogItemRead).await?;
             state
                 .admin
                 .items_page_by_group(
@@ -114,7 +114,7 @@ pub async fn items(
                 .map_err(|_| server_error("admin items failed"))
         }
         Method::POST => {
-            require_capability(&principal, Capability::CatalogItemCreate)?;
+            require_capability(&state, &principal, Capability::CatalogItemCreate).await?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
             state
                 .admin
@@ -147,7 +147,7 @@ pub async fn item_groups(
         return Err(method_not_allowed());
     }
     if method == Method::POST {
-        require_capability(&principal, Capability::CatalogItemGroupManage)?;
+        require_capability(&state, &principal, Capability::CatalogItemGroupManage).await?;
         let input: AdminCreateItemGroupRequest = parse_json(&body)?;
         return match state
             .admin
@@ -160,7 +160,7 @@ pub async fn item_groups(
         };
     }
     if method == Method::PUT {
-        require_capability(&principal, Capability::CatalogItemGroupManage)?;
+        require_capability(&state, &principal, Capability::CatalogItemGroupManage).await?;
         let input: AdminMoveItemGroupRequest = parse_json(&body)?;
         return match state
             .admin
@@ -172,7 +172,7 @@ pub async fn item_groups(
             Err(_) => Err(server_error("admin item group move failed")),
         };
     }
-    require_capability(&principal, Capability::CatalogItemGroupRead)?;
+    require_capability(&state, &principal, Capability::CatalogItemGroupRead).await?;
     state
         .admin
         .item_groups(query.q.as_deref().unwrap_or(""), 100)

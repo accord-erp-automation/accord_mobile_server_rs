@@ -71,6 +71,20 @@ pub struct RoleDefinitionUpsert {
     pub capability_codes: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleAssignment {
+    pub principal_role: PrincipalRole,
+    pub principal_ref: String,
+    pub role_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RoleAssignmentUpsert {
+    pub principal_role: PrincipalRole,
+    pub principal_ref: String,
+    pub role_id: String,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RoleDefinitionError {
     #[error("role id is required")]
@@ -87,6 +101,18 @@ pub enum RoleDefinitionError {
     UnknownCapability(String),
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RoleAssignmentError {
+    #[error("principal ref is required")]
+    MissingPrincipalRef,
+    #[error("role id is required")]
+    MissingRoleId,
+    #[error("unknown role: {0}")]
+    UnknownRole(String),
+    #[error("role base does not match principal role")]
+    RoleBaseMismatch,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RoleStoreError {
     #[error("role store failed")]
@@ -97,16 +123,20 @@ pub enum RoleStoreError {
 pub trait RoleDefinitionStorePort: Send + Sync {
     async fn role_definitions(&self) -> Result<Vec<RoleDefinition>, RoleStoreError>;
     async fn put_role_definition(&self, role: RoleDefinition) -> Result<(), RoleStoreError>;
+    async fn role_assignments(&self) -> Result<Vec<RoleAssignment>, RoleStoreError>;
+    async fn put_role_assignment(&self, assignment: RoleAssignment) -> Result<(), RoleStoreError>;
 }
 
 pub struct MemoryRoleDefinitionStore {
     roles: RwLock<BTreeMap<String, RoleDefinition>>,
+    assignments: RwLock<BTreeMap<String, RoleAssignment>>,
 }
 
 impl MemoryRoleDefinitionStore {
     pub fn new() -> Self {
         Self {
             roles: RwLock::new(BTreeMap::new()),
+            assignments: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -125,6 +155,18 @@ impl RoleDefinitionStorePort for MemoryRoleDefinitionStore {
 
     async fn put_role_definition(&self, role: RoleDefinition) -> Result<(), RoleStoreError> {
         self.roles.write().await.insert(role.id.clone(), role);
+        Ok(())
+    }
+
+    async fn role_assignments(&self) -> Result<Vec<RoleAssignment>, RoleStoreError> {
+        Ok(self.assignments.read().await.values().cloned().collect())
+    }
+
+    async fn put_role_assignment(&self, assignment: RoleAssignment) -> Result<(), RoleStoreError> {
+        self.assignments.write().await.insert(
+            role_assignment_key(&assignment.principal_role, &assignment.principal_ref),
+            assignment,
+        );
         Ok(())
     }
 }
@@ -399,6 +441,35 @@ pub fn normalize_custom_role(
     })
 }
 
+pub fn normalize_role_assignment(
+    input: RoleAssignmentUpsert,
+    roles: &[RoleDefinition],
+) -> Result<RoleAssignment, RoleAssignmentError> {
+    let principal_ref = input.principal_ref.trim().to_string();
+    if principal_ref.is_empty() {
+        return Err(RoleAssignmentError::MissingPrincipalRef);
+    }
+    let role_id = input.role_id.trim().to_ascii_lowercase();
+    if role_id.is_empty() {
+        return Err(RoleAssignmentError::MissingRoleId);
+    }
+    let Some(role) = roles.iter().find(|role| role.id == role_id) else {
+        return Err(RoleAssignmentError::UnknownRole(role_id));
+    };
+    if role.base_role != input.principal_role {
+        return Err(RoleAssignmentError::RoleBaseMismatch);
+    }
+    Ok(RoleAssignment {
+        principal_role: input.principal_role,
+        principal_ref,
+        role_id,
+    })
+}
+
+pub fn role_assignment_key(role: &PrincipalRole, ref_: &str) -> String {
+    format!("{}:{}", role_key(role), ref_.trim())
+}
+
 pub fn capabilities_for_role(role: PrincipalRole) -> Vec<Capability> {
     capability_catalog()
         .iter()
@@ -415,12 +486,28 @@ pub fn capability_codes_for_role(role: PrincipalRole) -> Vec<String> {
         .collect()
 }
 
+pub fn capability_code(capability: Capability) -> Option<&'static str> {
+    capability_catalog()
+        .iter()
+        .find(|definition| definition.capability == capability)
+        .map(|definition| definition.code)
+}
+
 pub fn has_capability(principal: &Principal, capability: Capability) -> bool {
     capability_catalog()
         .iter()
         .find(|definition| definition.capability == capability)
         .map(|definition| definition.default_roles.contains(&principal.role))
         .unwrap_or(false)
+}
+
+fn role_key(role: &PrincipalRole) -> &'static str {
+    match role {
+        PrincipalRole::Supplier => "supplier",
+        PrincipalRole::Werka => "werka",
+        PrincipalRole::Customer => "customer",
+        PrincipalRole::Admin => "admin",
+    }
 }
 
 fn system_role_ids() -> BTreeSet<&'static str> {
@@ -579,6 +666,28 @@ mod tests {
             ]
         );
         assert!(!role.system);
+    }
+
+    #[test]
+    fn role_assignment_must_match_role_base() {
+        let roles = vec![RoleDefinition {
+            id: "catalog_only".to_string(),
+            label: "Catalog only".to_string(),
+            base_role: PrincipalRole::Werka,
+            capability_codes: vec!["gscale.catalog.read".to_string()],
+            system: false,
+        }];
+
+        let assignment = normalize_role_assignment(
+            RoleAssignmentUpsert {
+                principal_role: PrincipalRole::Supplier,
+                principal_ref: "SUP-001".to_string(),
+                role_id: "catalog_only".to_string(),
+            },
+            &roles,
+        );
+
+        assert_eq!(assignment, Err(RoleAssignmentError::RoleBaseMismatch));
     }
 
     fn principal(role: PrincipalRole) -> Principal {

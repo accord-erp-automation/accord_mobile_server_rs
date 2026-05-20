@@ -25,7 +25,7 @@ pub async fn create_dispatch(
         ));
     }
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     let request: CreateDispatchRequest = serde_json::from_slice(&body).map_err(|_| {
         (

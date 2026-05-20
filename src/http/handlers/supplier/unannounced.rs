@@ -25,7 +25,7 @@ pub async fn unannounced_respond(
         ));
     }
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     let request: SupplierUnannouncedResponseRequest =
         serde_json::from_slice(&body).map_err(|_| {

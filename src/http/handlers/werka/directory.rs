@@ -16,7 +16,7 @@ pub async fn suppliers(
     Query(query): Query<DirectoryQuery>,
 ) -> Result<Json<Vec<SupplierDirectoryEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let q = query.q.as_deref().unwrap_or("").trim();
     let limit = optional_search_limit(query.limit.as_deref(), 200, 200);
@@ -38,7 +38,7 @@ pub async fn customers(
     Query(query): Query<DirectoryQuery>,
 ) -> Result<Json<Vec<CustomerDirectoryEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let q = query.q.as_deref().unwrap_or("").trim();
     let limit = optional_search_limit(query.limit.as_deref(), 200, 200);

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
-use crate::core::authz::{Capability, has_capability};
+use crate::core::authz::Capability;
 use crate::core::gscale::GscaleServiceError;
 use crate::core::rps_batch::{RpsBatchPrintRequest, RpsBatchServiceError, RpsBatchStartRequest};
 use crate::http::handlers::auth::bearer_token;
@@ -124,7 +124,11 @@ async fn authenticated_principal(
         .get(&token)
         .await
         .map_err(|_| unauthorized())?;
-    if !has_capability(&principal, Capability::RpsBatchManage) {
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::RpsBatchManage)
+        .await
+    {
         return Err(forbidden());
     }
     Ok(principal)

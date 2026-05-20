@@ -40,7 +40,9 @@ pub async fn customer_issue_create(
     let principal = authorize(&state, &headers)
         .await
         .map_err(issue_auth_error)?;
-    require_werka(&principal).map_err(issue_auth_error)?;
+    require_werka(&state, &principal)
+        .await
+        .map_err(issue_auth_error)?;
 
     let request: WerkaCustomerIssueCreateRequest = serde_json::from_slice(&body).map_err(|_| {
         (
@@ -100,7 +102,9 @@ pub async fn customer_issue_batch_create(
     let principal = authorize(&state, &headers)
         .await
         .map_err(issue_auth_error)?;
-    require_werka(&principal).map_err(issue_auth_error)?;
+    require_werka(&state, &principal)
+        .await
+        .map_err(issue_auth_error)?;
 
     let request: WerkaCustomerIssueBatchCreateRequest =
         serde_json::from_slice(&body).map_err(|_| {

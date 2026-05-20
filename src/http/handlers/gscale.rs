@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::core::admin::ports::AdminPortError;
 use crate::core::auth::models::Principal;
-use crate::core::authz::{Capability, has_capability};
+use crate::core::authz::Capability;
 use crate::core::gscale::{GscaleServiceError, MaterialReceiptPrintRequest};
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
 
@@ -21,7 +21,11 @@ pub async fn items(
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
-    if !has_capability(&principal, Capability::GscaleCatalogRead) {
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::GscaleCatalogRead)
+        .await
+    {
         return Err(forbidden());
     }
     let items = state
@@ -49,7 +53,11 @@ pub async fn material_receipt_print(
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
-    if !has_capability(&principal, Capability::GscalePrint) {
+    if !state
+        .admin
+        .principal_has_capability(&principal, Capability::GscalePrint)
+        .await
+    {
         return Err(forbidden());
     }
     let request: MaterialReceiptPrintRequest =

@@ -42,6 +42,7 @@ async fn admin_method_checks_happen_after_auth_like_go() {
     let cases = [
         ("PATCH", "/v1/mobile/admin/settings"),
         ("POST", "/v1/mobile/admin/roles"),
+        ("POST", "/v1/mobile/admin/role-assignments"),
         ("PATCH", "/v1/mobile/admin/suppliers"),
         ("POST", "/v1/mobile/admin/suppliers/list"),
         ("POST", "/v1/mobile/admin/suppliers/summary"),
@@ -225,6 +226,74 @@ async fn admin_roles_can_list_system_roles_and_save_custom_packages() {
     assert!(value.as_array().expect("roles").iter().any(|role| {
         role["id"] == "scale_operator" && role["capability_codes"][0] == "gscale.catalog.read"
     }));
+}
+
+#[tokio::test]
+async fn admin_role_assignment_limits_runtime_capabilities() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/roles",
+            &admin_token,
+            r#"{
+                "id":"catalog_only",
+                "label":"Catalog only",
+                "base_role":"werka",
+                "capability_codes":["gscale.catalog.read"]
+            }"#,
+        ))
+        .await
+        .expect("role response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"werka",
+                "principal_ref":"werka",
+                "role_id":"catalog_only"
+            }"#,
+        ))
+        .await
+        .expect("assignment response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["role_id"], "catalog_only");
+
+    let werka_token = session_for(&state, PrincipalRole::Werka, "werka").await;
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/gscale/items?limit=1",
+            &werka_token,
+        ))
+        .await
+        .expect("gscale items response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request("POST", "/v1/mobile/werka/summary", &werka_token))
+        .await
+        .expect("werka summary response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["error"], "forbidden");
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/rps/batch/start",
+            &werka_token,
+            r#"{"item_code":"ITEM-001","warehouse":"Stores - CH"}"#,
+        ))
+        .await
+        .expect("rps start response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["error"], "forbidden");
 }
 
 #[tokio::test]
@@ -988,13 +1057,17 @@ fn test_state() -> AppState {
 }
 
 async fn session(state: &AppState, role: PrincipalRole) -> String {
+    session_for(state, role, "admin").await
+}
+
+async fn session_for(state: &AppState, role: PrincipalRole, ref_: &str) -> String {
     state
         .sessions
         .create(Principal {
             role,
             display_name: "Admin".to_string(),
             legal_name: "Admin".to_string(),
-            ref_: "admin".to_string(),
+            ref_: ref_.to_string(),
             phone: "+998880000000".to_string(),
             avatar_url: String::new(),
         })

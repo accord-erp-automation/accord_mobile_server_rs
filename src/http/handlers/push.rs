@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::app::AppState;
 use crate::core::auth::models::Principal;
-use crate::core::authz::{Capability, has_capability};
+use crate::core::authz::Capability;
 use crate::core::push::models::PushTokenRegisterRequest;
 use crate::core::push::ports::PushServiceError;
 use crate::http::handlers::auth::{ErrorResponse, bearer_token};
@@ -20,7 +20,7 @@ pub async fn token(
     body: Bytes,
 ) -> Result<Json<OkResponse>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_push_role(&principal)?;
+    require_push_role(&state, &principal).await?;
 
     match method {
         Method::POST => {
@@ -72,8 +72,15 @@ async fn authorize(
     state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
-fn require_push_role(principal: &Principal) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if has_capability(principal, Capability::PushTokenManage) {
+async fn require_push_role(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::PushTokenManage)
+        .await
+    {
         Ok(())
     } else {
         Err((

@@ -16,7 +16,7 @@ pub async fn status_breakdown(
     Query(query): Query<StatusBreakdownQuery>,
 ) -> Result<Json<Vec<WerkaStatusBreakdownEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let kind = query.kind.as_deref().unwrap_or("").trim();
     match state.werka.status_breakdown(kind).await {
@@ -36,7 +36,7 @@ pub async fn status_details(
     Query(query): Query<StatusDetailsQuery>,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let kind = query.kind.as_deref().unwrap_or("").trim();
     let supplier_ref = query.supplier_ref.as_deref().unwrap_or("").trim();
@@ -56,7 +56,7 @@ pub async fn pending(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     match state.werka.pending(0).await {
         Ok(Some(items)) => Ok(Json(items)),
@@ -74,7 +74,7 @@ pub async fn history(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     match state.werka.history().await {
         Ok(Some(items)) => Ok(Json(items)),
@@ -92,7 +92,7 @@ pub async fn summary(
     headers: HeaderMap,
 ) -> Result<Json<WerkaHomeSummary>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     match state.werka.summary().await {
         Ok(Some(summary)) => Ok(Json(summary)),
@@ -110,7 +110,7 @@ pub async fn home(
     headers: HeaderMap,
 ) -> Result<Json<WerkaHomeData>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     match state.werka.home(20).await {
         Ok(Some(data)) => Ok(Json(data)),

@@ -25,7 +25,7 @@ pub async fn unannounced_create(
         ));
     }
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let request: WerkaUnannouncedCreateRequest = serde_json::from_slice(&body).map_err(|_| {
         (

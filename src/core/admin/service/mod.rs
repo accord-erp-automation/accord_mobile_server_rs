@@ -19,10 +19,12 @@ use crate::core::admin::ports::{
     AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
 };
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
+use crate::core::auth::models::Principal;
 use crate::core::auth::service::normalize_phone;
 use crate::core::authz::{
-    MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort, RoleDefinitionUpsert,
-    normalize_custom_role, system_role_definitions,
+    Capability, MemoryRoleDefinitionStore, RoleAssignment, RoleAssignmentUpsert, RoleDefinition,
+    RoleDefinitionStorePort, RoleDefinitionUpsert, capability_code, has_capability,
+    normalize_custom_role, normalize_role_assignment, role_assignment_key, system_role_definitions,
 };
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 
@@ -131,6 +133,10 @@ impl AdminService {
     }
 
     pub async fn role_definitions(&self) -> Result<Vec<RoleDefinition>, AdminPortError> {
+        self.all_role_definitions().await
+    }
+
+    async fn all_role_definitions(&self) -> Result<Vec<RoleDefinition>, AdminPortError> {
         let mut roles = system_role_definitions();
         roles.extend(
             self.role_store
@@ -147,6 +153,13 @@ impl AdminService {
         Ok(roles)
     }
 
+    pub async fn role_assignments(&self) -> Result<Vec<RoleAssignment>, AdminPortError> {
+        self.role_store
+            .role_assignments()
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)
+    }
+
     pub async fn upsert_role_definition(
         &self,
         input: RoleDefinitionUpsert,
@@ -158,6 +171,56 @@ impl AdminService {
             .await
             .map_err(|_| AdminPortError::LookupFailed)?;
         Ok(role)
+    }
+
+    pub async fn upsert_role_assignment(
+        &self,
+        input: RoleAssignmentUpsert,
+    ) -> Result<RoleAssignment, AdminPortError> {
+        let roles = self.all_role_definitions().await?;
+        let assignment = normalize_role_assignment(input, &roles)
+            .map_err(|error| AdminPortError::InvalidInput(error.to_string()))?;
+        self.role_store
+            .put_role_assignment(assignment.clone())
+            .await
+            .map_err(|_| AdminPortError::LookupFailed)?;
+        Ok(assignment)
+    }
+
+    pub async fn principal_has_capability(
+        &self,
+        principal: &Principal,
+        capability: Capability,
+    ) -> bool {
+        match self.principal_assigned_role(principal).await {
+            Ok(Some(role)) => capability_code(capability)
+                .map(|code| role.capability_codes.iter().any(|item| item == code))
+                .unwrap_or(false),
+            Ok(None) => has_capability(principal, capability),
+            Err(_) => false,
+        }
+    }
+
+    async fn principal_assigned_role(
+        &self,
+        principal: &Principal,
+    ) -> Result<Option<RoleDefinition>, AdminPortError> {
+        let key = role_assignment_key(&principal.role, &principal.ref_);
+        let Some(assignment) = self
+            .role_assignments()
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                role_assignment_key(&assignment.principal_role, &assignment.principal_ref) == key
+            })
+        else {
+            return Ok(None);
+        };
+        Ok(self
+            .all_role_definitions()
+            .await?
+            .into_iter()
+            .find(|role| role.id == assignment.role_id))
     }
 
     pub async fn settings(&self) -> Result<AdminSettings, AdminPortError> {

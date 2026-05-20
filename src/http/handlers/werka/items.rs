@@ -17,7 +17,7 @@ pub async fn supplier_items(
     Query(query): Query<SupplierItemsQuery>,
 ) -> Result<Json<Vec<SupplierItem>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let supplier_ref = query.supplier_ref.as_deref().unwrap_or("").trim();
     let q = query.q.as_deref().unwrap_or("").trim();
@@ -44,7 +44,7 @@ pub async fn customer_items(
     Query(query): Query<CustomerItemsQuery>,
 ) -> Result<Json<Vec<SupplierItem>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let customer_ref = query.customer_ref.as_deref().unwrap_or("").trim();
     let q = query.q.as_deref().unwrap_or("").trim();
@@ -71,7 +71,7 @@ pub async fn customer_item_options(
     Query(query): Query<DirectoryQuery>,
 ) -> Result<Json<Vec<CustomerItemOption>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let q = query.q.as_deref().unwrap_or("").trim();
     let limit = optional_search_limit(query.limit.as_deref(), 200, 200);

@@ -16,7 +16,7 @@ pub async fn archive(
     Query(query): Query<ArchiveQuery>,
 ) -> Result<Json<WerkaArchiveResponse>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let from = parse_archive_date(query.from.as_deref())?;
     let to = parse_archive_date(query.to.as_deref())?;
@@ -39,7 +39,7 @@ pub async fn archive_pdf(
     Query(query): Query<ArchiveQuery>,
 ) -> Result<Response<Body>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_werka(&principal)?;
+    require_werka(&state, &principal).await?;
 
     let from = parse_archive_date(query.from.as_deref()).map_err(|_| archive_pdf_failed())?;
     let to = parse_archive_date(query.to.as_deref()).map_err(|_| archive_pdf_failed())?;

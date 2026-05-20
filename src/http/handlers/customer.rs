@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::app::AppState;
 use crate::core::auth::models::{Principal, PrincipalRole};
-use crate::core::authz::{Capability, has_capability};
+use crate::core::authz::Capability;
 use crate::core::customer::models::{
     CustomerDeliveryDetail, CustomerDeliveryResponseRequest, CustomerHomeSummary,
 };
@@ -20,7 +20,7 @@ pub async fn summary(
     headers: HeaderMap,
 ) -> Result<Json<CustomerHomeSummary>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_customer(&principal)?;
+    require_customer(&state, &principal).await?;
 
     match state.customer.summary(&principal).await {
         Ok(Some(summary)) => Ok(Json(summary)),
@@ -33,7 +33,7 @@ pub async fn history(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_customer(&principal)?;
+    require_customer(&state, &principal).await?;
 
     match state.customer.history(&principal).await {
         Ok(Some(items)) => Ok(Json(items)),
@@ -47,7 +47,7 @@ pub async fn status_details(
     Query(query): Query<CustomerStatusDetailsQuery>,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_customer(&principal)?;
+    require_customer(&state, &principal).await?;
 
     let kind = query.kind.as_deref().unwrap_or("").trim();
     match state.customer.status_details(&principal, kind).await {
@@ -62,7 +62,7 @@ pub async fn detail(
     Query(query): Query<CustomerDetailQuery>,
 ) -> Result<Json<CustomerDeliveryDetail>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_customer(&principal)?;
+    require_customer(&state, &principal).await?;
 
     let delivery_note_id = query.delivery_note_id.as_deref().unwrap_or("").trim();
     if delivery_note_id.is_empty() {
@@ -97,7 +97,7 @@ pub async fn respond(
         ));
     }
     let principal = authorize(&state, &headers).await?;
-    require_customer(&principal)?;
+    require_customer(&state, &principal).await?;
 
     let request: CustomerDeliveryResponseRequest = serde_json::from_slice(&body).map_err(|_| {
         (
@@ -154,8 +154,15 @@ async fn authorize(
     state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
 
-fn require_customer(principal: &Principal) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if has_capability(principal, Capability::CustomerAccess) {
+async fn require_customer(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if state
+        .admin
+        .principal_has_capability(principal, Capability::CustomerAccess)
+        .await
+    {
         Ok(())
     } else {
         Err(forbidden())

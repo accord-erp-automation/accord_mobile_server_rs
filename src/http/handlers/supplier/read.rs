@@ -15,7 +15,7 @@ pub async fn summary(
     headers: HeaderMap,
 ) -> Result<Json<SupplierHomeSummary>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     match state
         .werka
@@ -37,7 +37,7 @@ pub async fn history(
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     match state
         .werka
@@ -60,7 +60,7 @@ pub async fn status_breakdown(
     Query(query): Query<SupplierStatusBreakdownQuery>,
 ) -> Result<Json<Vec<SupplierStatusBreakdownEntry>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     let kind = query.kind.as_deref().unwrap_or("").trim();
     match state
@@ -84,7 +84,7 @@ pub async fn status_details(
     Query(query): Query<SupplierStatusDetailsQuery>,
 ) -> Result<Json<Vec<DispatchRecord>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     let kind = query.kind.as_deref().unwrap_or("").trim();
     let item_code = query.item_code.as_deref().unwrap_or("").trim();
@@ -109,7 +109,7 @@ pub async fn items(
     Query(query): Query<SupplierItemsQuery>,
 ) -> Result<Json<Vec<SupplierItem>>, (StatusCode, Json<ErrorResponse>)> {
     let principal = authorize(&state, &headers).await?;
-    require_supplier(&principal)?;
+    require_supplier(&state, &principal).await?;
 
     let q = query.q.as_deref().unwrap_or("").trim();
     match state

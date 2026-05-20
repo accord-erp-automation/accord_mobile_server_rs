@@ -72,7 +72,7 @@ pub async fn roles(
     }
     match method {
         Method::GET => {
-            require_capability(&principal, Capability::RoleCapabilityRead)?;
+            require_capability(&state, &principal, Capability::RoleCapabilityRead).await?;
             state
                 .admin
                 .role_definitions()
@@ -81,12 +81,53 @@ pub async fn roles(
                 .map_err(|_| server_error("admin roles fetch failed"))
         }
         Method::PUT => {
-            require_capability(&principal, Capability::RoleCapabilityManage)?;
+            require_capability(&state, &principal, Capability::RoleCapabilityManage).await?;
             let input: RoleDefinitionUpsert = parse_json(&body)?;
             match state.admin.upsert_role_definition(input).await {
                 Ok(role) => Ok(json_response(role)),
                 Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
                 Err(_) => Err(server_error("admin role save failed")),
+            }
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn role_assignments(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::RoleCapabilityRead,
+            Capability::RoleCapabilityManage,
+        ],
+    )
+    .await?;
+    if !matches!(method, Method::GET | Method::PUT) {
+        return Err(method_not_allowed());
+    }
+    match method {
+        Method::GET => {
+            require_capability(&state, &principal, Capability::RoleCapabilityRead).await?;
+            state
+                .admin
+                .role_assignments()
+                .await
+                .map(json_response)
+                .map_err(|_| server_error("admin role assignments fetch failed"))
+        }
+        Method::PUT => {
+            require_capability(&state, &principal, Capability::RoleCapabilityManage).await?;
+            let input: RoleAssignmentUpsert = parse_json(&body)?;
+            match state.admin.upsert_role_assignment(input).await {
+                Ok(assignment) => Ok(json_response(assignment)),
+                Err(AdminPortError::InvalidInput(message)) => Err(bad_request(message)),
+                Err(_) => Err(server_error("admin role assignment save failed")),
             }
         }
         _ => Err(method_not_allowed()),
@@ -99,7 +140,7 @@ pub(super) async fn authorize_capability(
     capability: Capability,
 ) -> Result<Principal, AdminError> {
     let principal = authenticated_principal(state, headers).await?;
-    require_capability(&principal, capability)?;
+    require_capability(state, &principal, capability).await?;
     Ok(principal)
 }
 
@@ -109,21 +150,28 @@ pub(super) async fn authorize_any_capability(
     capabilities: &[Capability],
 ) -> Result<Principal, AdminError> {
     let principal = authenticated_principal(state, headers).await?;
-    if capabilities
-        .iter()
-        .any(|capability| has_capability(&principal, *capability))
-    {
-        Ok(principal)
-    } else {
-        Err(forbidden())
+    for capability in capabilities {
+        if state
+            .admin
+            .principal_has_capability(&principal, *capability)
+            .await
+        {
+            return Ok(principal);
+        }
     }
+    Err(forbidden())
 }
 
-pub(super) fn require_capability(
+pub(super) async fn require_capability(
+    state: &AppState,
     principal: &Principal,
     capability: Capability,
 ) -> Result<(), AdminError> {
-    if has_capability(principal, capability) {
+    if state
+        .admin
+        .principal_has_capability(principal, capability)
+        .await
+    {
         Ok(())
     } else {
         Err(forbidden())
