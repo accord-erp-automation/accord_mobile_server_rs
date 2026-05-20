@@ -30,6 +30,87 @@ Configure real `.env` values before production use. At minimum set `ERP_URL`,
 `ERP_API_KEY`, `ERP_API_SECRET`, and the store paths. Enable
 `ERP_DIRECT_READ_ENABLED=1` only when ERPNext database access is configured.
 
+## Current Production Additions
+
+The 2026-05-20 production branch adds two major runtime capabilities on top of
+the stable Rust mobile backend.
+
+### SQLite catalog read cache
+
+Catalog-style reads can now be served from a local SQLite cache synchronized
+from ERPNext MariaDB. ERPNext/MariaDB remains the source of truth, and ERPNext
+REST remains the write/submit path for mutations.
+
+Cached read scopes:
+
+- items and item groups;
+- suppliers and customers;
+- supplier item mappings;
+- customer item mappings;
+- profile phone/avatar lookup for supplier and customer roles.
+
+Covered mobile/admin read paths include:
+
+- admin item pages, item group picker/tree, supplier/customer directories, and
+  assigned item lists;
+- Werka supplier/customer directories and supplier/customer item pickers;
+- GScale catalog item lookup.
+
+Operational documents are intentionally not cached in this phase. Purchase
+receipts, delivery notes, stock entries, history, status, archive, and barcode
+lookup continue to use the existing direct DB/ERPNext paths.
+
+The cache supports full sync, delta sync for changed rows, delete reconciliation,
+and a same-count edge case where one row is deleted while another is inserted
+inside the same sync interval. Real ERP tests cover add, update, delete, and
+direct DB vs SQLite comparison across all cached read scopes.
+
+Enable with:
+
+```env
+ERP_CATALOG_CACHE_ENABLED=1
+ERP_CATALOG_CACHE_FALLBACK_DIRECT_DB=1
+ERP_CATALOG_CACHE_PATH=data/catalog_cache.sqlite
+ERP_CATALOG_CACHE_SYNC_INTERVAL_SECONDS=1
+```
+
+Production rollout should keep `ERP_CATALOG_CACHE_FALLBACK_DIRECT_DB=1` enabled
+until the cache has been observed under real traffic.
+
+### Role capability packages
+
+Admin-controlled role packages are now separated from the built-in mobile roles.
+The base roles still exist and remain the compatibility boundary:
+
+- `admin`
+- `werka`
+- `supplier`
+- `customer`
+
+Custom role packages are stored as named capability sets and can be assigned to
+specific principals by base role and reference. This lets the server restrict or
+combine existing features without adding a new hard-coded Rust role for every
+operator variant.
+
+Runtime endpoints:
+
+- `GET /v1/mobile/admin/capabilities`
+- `GET /v1/mobile/admin/roles`
+- `PUT /v1/mobile/admin/roles`
+- `GET /v1/mobile/admin/role-assignments`
+- `PUT /v1/mobile/admin/role-assignments`
+
+Role assignments override the default capability set for the assigned
+principal. If an assignment references a missing role package, access fails
+closed instead of falling back to the broader default role. The role store also
+keeps backward-compatible reading for the first JSON role-map format.
+
+Configure the persistent role store path with:
+
+```env
+MOBILE_API_ROLE_STORE_PATH=data/mobile_roles.json
+```
+
 ## Performance Validation
 
 The current production candidate was validated on 2026-05-15 after the LMDB
