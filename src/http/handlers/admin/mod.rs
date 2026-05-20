@@ -15,7 +15,7 @@ pub use suppliers::{
     assigned_supplier_items, inactive_suppliers, settings, supplier_detail, supplier_list,
     supplier_summary, suppliers,
 };
-use system::authorize_admin;
+use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system::{capabilities, items_bulk_move_group, werka_code_regenerate};
 
 use axum::Json;

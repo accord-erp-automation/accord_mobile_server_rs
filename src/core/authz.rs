@@ -5,11 +5,29 @@ use crate::core::auth::models::{Principal, PrincipalRole};
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Capability {
     AdminAccess,
+    RoleCapabilityRead,
+    AdminSettingsRead,
+    AdminSettingsManage,
     WerkaAccess,
     SupplierAccess,
     CustomerAccess,
     PushTokenManage,
     SupplierAvatarManage,
+    CatalogItemRead,
+    CatalogItemCreate,
+    CatalogItemGroupRead,
+    CatalogItemGroupManage,
+    CatalogItemBulkMove,
+    SupplierDirectoryRead,
+    SupplierDirectoryManage,
+    SupplierItemAssign,
+    SupplierCodeManage,
+    CustomerDirectoryRead,
+    CustomerDirectoryManage,
+    CustomerItemAssign,
+    CustomerCodeManage,
+    AdminActivityRead,
+    WerkaCodeManage,
     GscaleCatalogRead,
     GscalePrint,
     RpsBatchManage,
@@ -45,6 +63,24 @@ const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         default_roles: ADMIN_ONLY,
     },
     CapabilityDefinition {
+        capability: Capability::RoleCapabilityRead,
+        code: "role.capability.read",
+        label: "Role capability catalog read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::AdminSettingsRead,
+        code: "admin.settings.read",
+        label: "Admin settings read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::AdminSettingsManage,
+        code: "admin.settings.manage",
+        label: "Admin settings manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
         capability: Capability::WerkaAccess,
         code: "werka.access",
         label: "Werka workspace",
@@ -73,6 +109,96 @@ const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         code: "supplier.avatar.manage",
         label: "Supplier avatar manage",
         default_roles: SUPPLIER_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CatalogItemRead,
+        code: "catalog.item.read",
+        label: "Catalog item read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CatalogItemCreate,
+        code: "catalog.item.create",
+        label: "Catalog item create",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CatalogItemGroupRead,
+        code: "catalog.item_group.read",
+        label: "Catalog item group read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CatalogItemGroupManage,
+        code: "catalog.item_group.manage",
+        label: "Catalog item group manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CatalogItemBulkMove,
+        code: "catalog.item.bulk_move",
+        label: "Catalog item bulk move",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::SupplierDirectoryRead,
+        code: "party.supplier.read",
+        label: "Supplier directory read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::SupplierDirectoryManage,
+        code: "party.supplier.manage",
+        label: "Supplier directory manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::SupplierItemAssign,
+        code: "party.supplier.item.assign",
+        label: "Supplier item assign",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::SupplierCodeManage,
+        code: "party.supplier.code.manage",
+        label: "Supplier code manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CustomerDirectoryRead,
+        code: "party.customer.read",
+        label: "Customer directory read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CustomerDirectoryManage,
+        code: "party.customer.manage",
+        label: "Customer directory manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CustomerItemAssign,
+        code: "party.customer.item.assign",
+        label: "Customer item assign",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::CustomerCodeManage,
+        code: "party.customer.code.manage",
+        label: "Customer code manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::AdminActivityRead,
+        code: "admin.activity.read",
+        label: "Admin activity read",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
+        capability: Capability::WerkaCodeManage,
+        code: "werka.code.manage",
+        label: "Werka code manage",
+        default_roles: ADMIN_ONLY,
     },
     CapabilityDefinition {
         capability: Capability::GscaleCatalogRead,
@@ -217,6 +343,43 @@ mod tests {
             Some(Capability::GscalePrint)
         );
         assert!(capability_by_code("missing.capability").is_none());
+    }
+
+    #[test]
+    fn admin_business_capabilities_are_named_for_real_workflows() {
+        let admin = principal(PrincipalRole::Admin);
+
+        for capability in [
+            Capability::RoleCapabilityRead,
+            Capability::AdminSettingsRead,
+            Capability::AdminSettingsManage,
+            Capability::CatalogItemRead,
+            Capability::CatalogItemCreate,
+            Capability::CatalogItemGroupRead,
+            Capability::CatalogItemGroupManage,
+            Capability::CatalogItemBulkMove,
+            Capability::SupplierDirectoryRead,
+            Capability::SupplierDirectoryManage,
+            Capability::SupplierItemAssign,
+            Capability::SupplierCodeManage,
+            Capability::CustomerDirectoryRead,
+            Capability::CustomerDirectoryManage,
+            Capability::CustomerItemAssign,
+            Capability::CustomerCodeManage,
+            Capability::AdminActivityRead,
+            Capability::WerkaCodeManage,
+        ] {
+            assert!(has_capability(&admin, capability));
+        }
+
+        assert_eq!(
+            capability_by_code("catalog.item.create").map(|item| item.capability),
+            Some(Capability::CatalogItemCreate)
+        );
+        assert_eq!(
+            capability_by_code("party.supplier.item.assign").map(|item| item.capability),
+            Some(Capability::SupplierItemAssign)
+        );
     }
 
     fn principal(role: PrincipalRole) -> Principal {

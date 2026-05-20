@@ -7,7 +7,7 @@ pub async fn supplier_status(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryManage).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
@@ -27,7 +27,7 @@ pub async fn supplier_phone(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryManage).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
@@ -47,7 +47,7 @@ pub async fn supplier_items(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierItemAssign).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
@@ -71,7 +71,7 @@ pub async fn supplier_item_add(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierItemAssign).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -91,7 +91,7 @@ pub async fn supplier_item_remove(
     headers: HeaderMap,
     Query(query): Query<RefItemQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierItemAssign).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
@@ -110,7 +110,7 @@ pub async fn supplier_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierCodeManage).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -131,7 +131,7 @@ pub async fn supplier_remove(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<OkResponse>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryManage).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
@@ -149,7 +149,7 @@ pub async fn supplier_restore(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryManage).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }

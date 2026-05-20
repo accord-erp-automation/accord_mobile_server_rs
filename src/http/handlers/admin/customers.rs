@@ -6,18 +6,30 @@ pub async fn customers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::CustomerDirectoryRead,
+            Capability::CustomerDirectoryManage,
+        ],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
     match method {
-        Method::GET => state
-            .admin
-            .customers(500)
-            .await
-            .map(json_response)
-            .map_err(|_| server_error("customers fetch failed")),
+        Method::GET => {
+            require_capability(&principal, Capability::CustomerDirectoryRead)?;
+            state
+                .admin
+                .customers(500)
+                .await
+                .map(json_response)
+                .map_err(|_| server_error("customers fetch failed"))
+        }
         Method::POST => {
+            require_capability(&principal, Capability::CustomerDirectoryManage)?;
             let input: AdminCreateCustomerRequest = parse_json(&body)?;
             state
                 .admin
@@ -36,7 +48,7 @@ pub async fn customer_list(
     headers: HeaderMap,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<CustomerDirectoryEntry>>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -57,7 +69,7 @@ pub async fn customer_detail(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -77,23 +89,32 @@ pub async fn items(
     Query(query): Query<ItemQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::CatalogItemRead, Capability::CatalogItemCreate],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
     match method {
-        Method::GET => state
-            .admin
-            .items_page_by_group(
-                query.group.as_deref().unwrap_or(""),
-                query.q.as_deref().unwrap_or(""),
-                positive_int(query.limit.as_deref(), 50),
-                optional_offset(query.offset.as_deref()),
-            )
-            .await
-            .map(json_response)
-            .map_err(|_| server_error("admin items failed")),
+        Method::GET => {
+            require_capability(&principal, Capability::CatalogItemRead)?;
+            state
+                .admin
+                .items_page_by_group(
+                    query.group.as_deref().unwrap_or(""),
+                    query.q.as_deref().unwrap_or(""),
+                    positive_int(query.limit.as_deref(), 50),
+                    optional_offset(query.offset.as_deref()),
+                )
+                .await
+                .map(json_response)
+                .map_err(|_| server_error("admin items failed"))
+        }
         Method::POST => {
+            require_capability(&principal, Capability::CatalogItemCreate)?;
             let input: AdminCreateItemRequest = parse_json(&body)?;
             state
                 .admin
@@ -113,11 +134,20 @@ pub async fn item_groups(
     Query(query): Query<ItemQuery>,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::CatalogItemGroupRead,
+            Capability::CatalogItemGroupManage,
+        ],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::POST | Method::PUT) {
         return Err(method_not_allowed());
     }
     if method == Method::POST {
+        require_capability(&principal, Capability::CatalogItemGroupManage)?;
         let input: AdminCreateItemGroupRequest = parse_json(&body)?;
         return match state
             .admin
@@ -130,6 +160,7 @@ pub async fn item_groups(
         };
     }
     if method == Method::PUT {
+        require_capability(&principal, Capability::CatalogItemGroupManage)?;
         let input: AdminMoveItemGroupRequest = parse_json(&body)?;
         return match state
             .admin
@@ -141,6 +172,7 @@ pub async fn item_groups(
             Err(_) => Err(server_error("admin item group move failed")),
         };
     }
+    require_capability(&principal, Capability::CatalogItemGroupRead)?;
     state
         .admin
         .item_groups(query.q.as_deref().unwrap_or(""), 100)
@@ -154,7 +186,7 @@ pub async fn item_group_tree(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CatalogItemGroupRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -171,7 +203,7 @@ pub async fn activity(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<Vec<DispatchRecord>>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::AdminActivityRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -193,7 +225,7 @@ pub async fn customer_phone(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerDirectoryManage).await?;
     if method != Method::PUT {
         return Err(method_not_allowed());
     }
@@ -213,7 +245,7 @@ pub async fn customer_code_regenerate(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerCodeManage).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -233,7 +265,7 @@ pub async fn customer_item_add(
     Query(query): Query<RefQuery>,
     body: Bytes,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerItemAssign).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -256,7 +288,7 @@ pub async fn customer_item_remove(
     headers: HeaderMap,
     Query(query): Query<RefItemQuery>,
 ) -> Result<Json<AdminCustomerDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerItemAssign).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }
@@ -274,7 +306,7 @@ pub async fn customer_remove(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<OkResponse>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CustomerDirectoryManage).await?;
     if method != Method::DELETE {
         return Err(method_not_allowed());
     }

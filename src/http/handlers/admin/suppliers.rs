@@ -6,18 +6,30 @@ pub async fn settings(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<AdminSettings>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminSettingsRead,
+            Capability::AdminSettingsManage,
+        ],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::PUT) {
         return Err(method_not_allowed());
     }
     match method {
-        Method::GET => state
-            .admin
-            .settings()
-            .await
-            .map(Json)
-            .map_err(|_| server_error("settings fetch failed")),
+        Method::GET => {
+            require_capability(&principal, Capability::AdminSettingsRead)?;
+            state
+                .admin
+                .settings()
+                .await
+                .map(Json)
+                .map_err(|_| server_error("settings fetch failed"))
+        }
         Method::PUT => {
+            require_capability(&principal, Capability::AdminSettingsManage)?;
             let input: AdminSettings = parse_json(&body)?;
             state
                 .admin
@@ -36,12 +48,21 @@ pub async fn suppliers(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::SupplierDirectoryRead,
+            Capability::SupplierDirectoryManage,
+        ],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::POST) {
         return Err(method_not_allowed());
     }
     match method {
         Method::GET => {
+            require_capability(&principal, Capability::SupplierDirectoryRead)?;
             let summary = state
                 .admin
                 .supplier_summary(300)
@@ -66,6 +87,7 @@ pub async fn suppliers(
             }))
         }
         Method::POST => {
+            require_capability(&principal, Capability::SupplierDirectoryManage)?;
             let input: AdminCreateSupplierRequest = parse_json(&body)?;
             state
                 .admin
@@ -84,7 +106,7 @@ pub async fn supplier_list(
     headers: HeaderMap,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<Vec<AdminSupplier>>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -104,7 +126,7 @@ pub async fn supplier_summary(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<AdminSupplierSummary>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -122,7 +144,7 @@ pub async fn supplier_detail(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<AdminSupplierDetail>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -139,7 +161,7 @@ pub async fn inactive_suppliers(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminSupplier>>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
@@ -157,7 +179,7 @@ pub async fn assigned_supplier_items(
     headers: HeaderMap,
     Query(query): Query<RefQuery>,
 ) -> Result<Json<Vec<SupplierItem>>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::SupplierDirectoryRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }

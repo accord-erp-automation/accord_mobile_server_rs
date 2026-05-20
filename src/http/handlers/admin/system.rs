@@ -6,7 +6,7 @@ pub async fn items_bulk_move_group(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<AdminItemGroupBulkMoveResult>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::CatalogItemBulkMove).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -27,7 +27,7 @@ pub async fn werka_code_regenerate(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Json<AdminSettings>, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::WerkaCodeManage).await?;
     if method != Method::POST {
         return Err(method_not_allowed());
     }
@@ -45,26 +45,54 @@ pub async fn capabilities(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    authorize_admin(&state, &headers).await?;
+    authorize_capability(&state, &headers, Capability::RoleCapabilityRead).await?;
     if method != Method::GET {
         return Err(method_not_allowed());
     }
     Ok(json_response(capability_catalog_entries()))
 }
 
-pub(super) async fn authorize_admin(
+pub(super) async fn authorize_capability(
     state: &AppState,
     headers: &HeaderMap,
+    capability: Capability,
 ) -> Result<Principal, AdminError> {
-    let token = bearer_token(headers).ok_or_else(unauthorized)?;
-    let principal = state
-        .sessions
-        .get(&token)
-        .await
-        .map_err(|_| unauthorized())?;
-    if has_capability(&principal, Capability::AdminAccess) {
+    let principal = authenticated_principal(state, headers).await?;
+    require_capability(&principal, capability)?;
+    Ok(principal)
+}
+
+pub(super) async fn authorize_any_capability(
+    state: &AppState,
+    headers: &HeaderMap,
+    capabilities: &[Capability],
+) -> Result<Principal, AdminError> {
+    let principal = authenticated_principal(state, headers).await?;
+    if capabilities
+        .iter()
+        .any(|capability| has_capability(&principal, *capability))
+    {
         Ok(principal)
     } else {
         Err(forbidden())
     }
+}
+
+pub(super) fn require_capability(
+    principal: &Principal,
+    capability: Capability,
+) -> Result<(), AdminError> {
+    if has_capability(principal, capability) {
+        Ok(())
+    } else {
+        Err(forbidden())
+    }
+}
+
+async fn authenticated_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, AdminError> {
+    let token = bearer_token(headers).ok_or_else(unauthorized)?;
+    state.sessions.get(&token).await.map_err(|_| unauthorized())
 }
