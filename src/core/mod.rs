@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod authz;
 pub mod customer;
 pub mod gscale;
 pub mod profile;

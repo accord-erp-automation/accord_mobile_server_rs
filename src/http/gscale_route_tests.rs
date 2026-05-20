@@ -9,6 +9,9 @@ use tower::ServiceExt;
 use super::router::build_router;
 use crate::app::AppState;
 use crate::config::AppConfig;
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup};
+use crate::core::admin::ports::{AdminPortError, AdminReadPort};
+use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::gscale::GscaleService;
 use crate::core::gscale::models::{
@@ -19,6 +22,7 @@ use crate::core::gscale::ports::{
     EpcSource, GscalePortError, MaterialReceiptErpPort, ScaleDriverPort,
 };
 use crate::core::session::manager::SessionManager;
+use crate::core::werka::models::SupplierItem;
 use crate::rps::RpsDriverClient;
 
 #[tokio::test]
@@ -98,6 +102,49 @@ async fn material_receipt_print_uses_parallel_driver_first_flow() {
         events.lock().unwrap().as_slice(),
         ["print", "create:1.720", "submit:MAT-STE-ROUTE"]
     );
+}
+
+#[tokio::test]
+async fn gscale_items_use_admin_catalog_without_customer_scope() {
+    let mut state = test_state();
+    state.admin =
+        AdminService::new(&state.config).with_read_port(Arc::new(FakeAdminCatalogReadPort));
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+    let werka_token = session(&state, PrincipalRole::Werka).await;
+    let supplier_token = session(&state, PrincipalRole::Supplier).await;
+    let router = build_router(state);
+
+    for token in [&admin_token, &werka_token] {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/mobile/gscale/items?q=film&group=Products&limit=20",
+                token,
+                "",
+            ))
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = json_body(response).await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body.as_array().expect("array").len(), 1);
+        assert_eq!(body[0]["code"], "GSCALE-ITEM-001");
+        assert_eq!(body[0]["item_group"], "Products");
+    }
+
+    let forbidden = router
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/gscale/items",
+            &supplier_token,
+            "",
+        ))
+        .await
+        .expect("response");
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(forbidden).await["error"], "forbidden");
 }
 
 #[tokio::test]
@@ -546,6 +593,102 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
 
 struct FakeErp {
     events: Arc<Mutex<Vec<String>>>,
+}
+
+struct FakeAdminCatalogReadPort;
+
+#[async_trait]
+impl AdminReadPort for FakeAdminCatalogReadPort {
+    async fn suppliers_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn supplier_by_ref(&self, _ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::NotFound)
+    }
+
+    async fn customers_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn customer_by_ref(&self, _ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        Err(AdminPortError::NotFound)
+    }
+
+    async fn items_page(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn items_page_by_group(
+        &self,
+        group: &str,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        assert_eq!(group, "Products");
+        assert_eq!(query, "film");
+        assert_eq!(limit, 20);
+        assert_eq!(offset, 0);
+        Ok(vec![SupplierItem {
+            code: "GSCALE-ITEM-001".to_string(),
+            name: "GScale Film".to_string(),
+            uom: "Kg".to_string(),
+            warehouse: "Stores - A".to_string(),
+            item_group: "Products".to_string(),
+        }])
+    }
+
+    async fn items_by_codes(
+        &self,
+        _item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn item_groups(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<String>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        _supplier_ref: &str,
+        _limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Ok(Vec::new())
+    }
+
+    async fn customer_items(
+        &self,
+        _customer_ref: &str,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]

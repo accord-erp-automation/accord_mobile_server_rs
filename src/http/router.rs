@@ -20,6 +20,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/profile", any(profile::profile))
         .route("/v1/mobile/profile/avatar", any(profile::avatar_upload))
         .route("/v1/mobile/push/token", any(push::token))
+        .route("/v1/mobile/gscale/items", any(gscale::items))
         .route(
             "/v1/mobile/gscale/material-receipt/print",
             any(gscale::material_receipt_print),
