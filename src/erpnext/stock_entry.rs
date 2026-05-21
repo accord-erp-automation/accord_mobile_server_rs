@@ -16,15 +16,7 @@ impl MaterialReceiptErpPort for ErpnextClient {
         validate_create_input(&input)?;
         let company = self.stock_entry_warehouse_company(&input.warehouse).await?;
         let uom = blank_default(&self.stock_entry_item_uom(&input.item_code).await?, "Kg");
-        let item = serde_json::json!({
-            "item_code": input.item_code.trim(),
-            "t_warehouse": input.warehouse.trim(),
-            "qty": input.qty,
-            "uom": uom,
-            "stock_uom": uom,
-            "conversion_factor": 1,
-            "barcode": input.barcode.trim().to_ascii_uppercase(),
-        });
+        let item = build_material_receipt_item(&input, &uom);
         let payload = serde_json::json!({
             "stock_entry_type": "Material Receipt",
             "company": company,
@@ -231,6 +223,42 @@ fn blank_default(value: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         value.to_string()
+    }
+}
+
+fn build_material_receipt_item(input: &CreateMaterialReceiptDraftInput, uom: &str) -> Value {
+    serde_json::json!({
+        "item_code": input.item_code.trim(),
+        "t_warehouse": input.warehouse.trim(),
+        "qty": input.qty,
+        "uom": uom,
+        "stock_uom": uom,
+        "conversion_factor": 1,
+        "basic_rate": 1.0,
+        "valuation_rate": 1.0,
+        "barcode": input.barcode.trim().to_ascii_uppercase(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_receipt_item_payload_uses_nonzero_default_rate() {
+        let item = build_material_receipt_item(
+            &CreateMaterialReceiptDraftInput {
+                item_code: " TEST-ITEM ".to_string(),
+                warehouse: " Stores - A ".to_string(),
+                qty: 5.0,
+                barcode: " epc-1 ".to_string(),
+            },
+            "Kg",
+        );
+
+        assert_eq!(item["item_code"], "TEST-ITEM");
+        assert_eq!(item["basic_rate"], 1.0);
+        assert_eq!(item["valuation_rate"], 1.0);
     }
 }
 
