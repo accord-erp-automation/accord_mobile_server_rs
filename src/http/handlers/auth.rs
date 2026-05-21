@@ -43,10 +43,12 @@ pub async fn login(
     } else {
         None
     };
+    let capabilities = state.admin.principal_capability_codes(&principal).await;
 
     Ok(Json(LoginResponse {
         profile: with_avatar_proxy(&headers, principal, &token),
         token,
+        capabilities,
         werka_home,
     }))
 }

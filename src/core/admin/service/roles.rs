@@ -75,6 +75,14 @@ impl AdminService {
         }
     }
 
+    pub async fn principal_capability_codes(&self, principal: &Principal) -> Vec<String> {
+        match self.principal_assigned_role(principal).await {
+            Ok(Some(role)) => role.capability_codes,
+            Ok(None) => capability_codes_for_role(principal.role.clone()),
+            Err(_) => Vec::new(),
+        }
+    }
+
     async fn principal_assigned_role(
         &self,
         principal: &Principal,

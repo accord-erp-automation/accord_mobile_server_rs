@@ -24,8 +24,9 @@ use crate::core::auth::models::Principal;
 use crate::core::auth::service::normalize_phone;
 use crate::core::authz::{
     Capability, MemoryRoleDefinitionStore, RoleAssignment, RoleAssignmentUpsert, RoleDefinition,
-    RoleDefinitionStorePort, RoleDefinitionUpsert, capability_code, has_capability,
-    normalize_custom_role, normalize_role_assignment, role_assignment_key, system_role_definitions,
+    RoleDefinitionStorePort, RoleDefinitionUpsert, capability_code, capability_codes_for_role,
+    has_capability, normalize_custom_role, normalize_role_assignment, role_assignment_key,
+    system_role_definitions,
 };
 use crate::core::werka::models::{CustomerDirectoryEntry, SupplierItem};
 

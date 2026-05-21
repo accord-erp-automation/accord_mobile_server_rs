@@ -312,6 +312,58 @@ async fn admin_role_assignment_limits_runtime_capabilities() {
 }
 
 #[tokio::test]
+async fn login_returns_effective_capabilities_for_assigned_custom_role() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/roles",
+            &admin_token,
+            r#"{
+                "id":"scale_only",
+                "label":"Scale only",
+                "capability_codes":["gscale.catalog.read","gscale.print","rps.batch.manage"]
+            }"#,
+        ))
+        .await
+        .expect("role response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"werka",
+                "principal_ref":"werka",
+                "role_id":"scale_only"
+            }"#,
+        ))
+        .await
+        .expect("assignment response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/auth/login",
+            "",
+            r#"{"phone":"+99888862440","code":"20ABCDEF1234"}"#,
+        ))
+        .await
+        .expect("login response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(
+        value["capabilities"],
+        serde_json::json!(["gscale.catalog.read", "gscale.print", "rps.batch.manage"])
+    );
+}
+
+#[tokio::test]
 async fn admin_settings_ignores_state_read_failure_like_go() {
     let mut state = test_state();
     let erp = Arc::new(FakeAdminReadPort);

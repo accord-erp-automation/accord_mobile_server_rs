@@ -36,6 +36,7 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub token: String,
     pub profile: Principal,
+    pub capabilities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub werka_home: Option<WerkaHomeData>,
 }
@@ -63,6 +64,7 @@ mod tests {
         let response = LoginResponse {
             token: "token".to_string(),
             profile: werka_profile(),
+            capabilities: Vec::new(),
             werka_home: None,
         };
 
@@ -76,6 +78,7 @@ mod tests {
         let response = LoginResponse {
             token: "token".to_string(),
             profile: werka_profile(),
+            capabilities: vec!["werka.access".to_string()],
             werka_home: Some(WerkaHomeData {
                 summary: WerkaHomeSummary {
                     pending_count: 2,
