@@ -142,7 +142,7 @@ mod tests {
             .put_role_definition(RoleDefinition {
                 id: "scale_operator".to_string(),
                 label: "Scale operator".to_string(),
-                base_role: PrincipalRole::Werka,
+                base_role: None,
                 capability_codes: vec!["gscale.print".to_string()],
                 system: false,
             })
@@ -167,7 +167,7 @@ mod tests {
             .put_role_definition(RoleDefinition {
                 id: "catalog_only".to_string(),
                 label: "Catalog only".to_string(),
-                base_role: PrincipalRole::Werka,
+                base_role: None,
                 capability_codes: vec!["gscale.catalog.read".to_string()],
                 system: false,
             })
@@ -230,6 +230,7 @@ mod tests {
 
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].id, "scale_operator");
+        assert!(roles[0].base_role.is_some());
         assert_eq!(roles[0].capability_codes, vec!["gscale.print"]);
     }
 }

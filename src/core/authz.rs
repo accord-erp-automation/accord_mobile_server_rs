@@ -61,7 +61,8 @@ pub struct CapabilityCatalogEntry {
 pub struct RoleDefinition {
     pub id: String,
     pub label: String,
-    pub base_role: PrincipalRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_role: Option<PrincipalRole>,
     pub capability_codes: Vec<String>,
     pub system: bool,
 }
@@ -70,7 +71,8 @@ pub struct RoleDefinition {
 pub struct RoleDefinitionUpsert {
     pub id: String,
     pub label: String,
-    pub base_role: PrincipalRole,
+    #[serde(default)]
+    pub base_role: Option<PrincipalRole>,
     pub capability_codes: Vec<String>,
 }
 
@@ -208,7 +210,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         id: id.to_string(),
         label: label.to_string(),
         capability_codes: capability_codes_for_role(role.clone()),
-        base_role: role,
+        base_role: Some(role),
         system: true,
     })
     .collect()
@@ -260,7 +262,7 @@ pub fn normalize_custom_role(
     Ok(RoleDefinition {
         id,
         label,
-        base_role: input.base_role,
+        base_role: None,
         capability_codes,
         system: false,
     })
@@ -281,7 +283,7 @@ pub fn normalize_role_assignment(
     let Some(role) = roles.iter().find(|role| role.id == role_id) else {
         return Err(RoleAssignmentError::UnknownRole(role_id));
     };
-    if role.base_role != input.principal_role {
+    if role.system && role.base_role != Some(input.principal_role.clone()) {
         return Err(RoleAssignmentError::RoleBaseMismatch);
     }
     Ok(RoleAssignment {

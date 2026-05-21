@@ -198,7 +198,6 @@ async fn admin_roles_can_list_system_roles_and_save_custom_packages() {
             r#"{
                 "id":"scale_operator",
                 "label":"Scale operator",
-                "base_role":"werka",
                 "capability_codes":[
                     "gscale.catalog.read",
                     "gscale.print",
@@ -213,6 +212,7 @@ async fn admin_roles_can_list_system_roles_and_save_custom_packages() {
     let saved = json_body(response).await;
     assert_eq!(saved["id"], "scale_operator");
     assert_eq!(saved["system"], false);
+    assert!(saved.get("base_role").is_none());
     assert_eq!(
         saved["capability_codes"],
         serde_json::json!(["gscale.catalog.read", "gscale.print", "rps.batch.manage"])
@@ -241,7 +241,6 @@ async fn admin_role_assignment_limits_runtime_capabilities() {
             r#"{
                 "id":"catalog_only",
                 "label":"Catalog only",
-                "base_role":"werka",
                 "capability_codes":["gscale.catalog.read"]
             }"#,
         ))
@@ -262,6 +261,22 @@ async fn admin_role_assignment_limits_runtime_capabilities() {
         ))
         .await
         .expect("assignment response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["role_id"], "catalog_only");
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"supplier",
+                "principal_ref":"SUP-001",
+                "role_id":"catalog_only"
+            }"#,
+        ))
+        .await
+        .expect("supplier assignment response");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json_body(response).await["role_id"], "catalog_only");
 
