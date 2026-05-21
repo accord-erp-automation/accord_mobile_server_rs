@@ -126,6 +126,14 @@ impl AuthService {
             .search_suppliers(normalized_phone, 50)
             .await
             .map_err(|_| AuthError::Internal)?;
+        if suppliers.is_empty()
+            && let Some(local_phone) = local_phone_query(normalized_phone)
+        {
+            suppliers = supplier_lookup
+                .search_suppliers(&local_phone, 50)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
         if suppliers.is_empty() {
             suppliers = supplier_lookup
                 .search_suppliers("", 500)
@@ -146,7 +154,7 @@ impl AuthService {
 
             let code_value = supplier_access_code_for(&supplier, &state)?;
             if code.trim() == code_value
-                && supplier.phone.trim().eq_ignore_ascii_case(normalized_phone)
+                && phone_matches_normalized(&supplier.phone, normalized_phone)
             {
                 return Ok(Principal {
                     role: PrincipalRole::Supplier,
@@ -180,6 +188,14 @@ impl AuthService {
             .search_customers(normalized_phone, 50)
             .await
             .map_err(|_| AuthError::Internal)?;
+        if customers.is_empty()
+            && let Some(local_phone) = local_phone_query(normalized_phone)
+        {
+            customers = customer_lookup
+                .search_customers(&local_phone, 50)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
         if customers.is_empty() {
             customers = customer_lookup
                 .search_customers("", 500)
@@ -199,7 +215,7 @@ impl AuthService {
                 continue;
             }
             if code.trim() == code_value
-                && customer.phone.trim().eq_ignore_ascii_case(normalized_phone)
+                && phone_matches_normalized(&customer.phone, normalized_phone)
             {
                 return Ok(Principal {
                     role: PrincipalRole::Customer,
@@ -323,6 +339,21 @@ fn blank_default(value: &str, fallback: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn phone_matches_normalized(stored_phone: &str, normalized_login_phone: &str) -> bool {
+    normalize_phone(stored_phone)
+        .map(|phone| phone.eq_ignore_ascii_case(normalized_login_phone))
+        .unwrap_or_else(|_| {
+            stored_phone
+                .trim()
+                .eq_ignore_ascii_case(normalized_login_phone)
+        })
+}
+
+fn local_phone_query(normalized_phone: &str) -> Option<String> {
+    let digits = normalized_phone.trim().strip_prefix('+')?;
+    (digits.len() == 12 && digits.starts_with("998")).then(|| digits[3..].to_string())
 }
 
 fn supplier_access_code_for(

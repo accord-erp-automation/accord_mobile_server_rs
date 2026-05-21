@@ -151,6 +151,36 @@ async fn supplier_login_respects_custom_code_and_blocked_state() {
 }
 
 #[tokio::test]
+async fn supplier_login_accepts_local_erp_phone() {
+    let suppliers = Arc::new(FakeSupplierLookup {
+        suppliers: vec![SupplierRecord {
+            id: "SUP-LOCAL".to_string(),
+            name: "Local Supplier".to_string(),
+            phone: "901234567".to_string(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "SUP-LOCAL".to_string(),
+            AdminAccessState {
+                custom_code: "10LOCAL".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_supplier_dependencies(suppliers, states);
+
+    let principal = auth
+        .login("901234567", "10LOCAL")
+        .await
+        .expect("supplier login");
+
+    assert_eq!(principal.role, PrincipalRole::Supplier);
+    assert_eq!(principal.ref_, "SUP-LOCAL");
+}
+
+#[tokio::test]
 async fn customer_login_requires_custom_code() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![CustomerRecord {
@@ -181,6 +211,36 @@ async fn customer_login_requires_custom_code() {
 }
 
 #[tokio::test]
+async fn customer_login_accepts_local_erp_phone() {
+    let customers = Arc::new(FakeCustomerLookup {
+        customers: vec![CustomerRecord {
+            id: "CUST-LOCAL".to_string(),
+            name: "Local Customer".to_string(),
+            phone: "990000088".to_string(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "CUST-LOCAL".to_string(),
+            AdminAccessState {
+                custom_code: "30LOCAL".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_customer_dependencies(customers, states);
+
+    let principal = auth
+        .login("990000088", "30LOCAL")
+        .await
+        .expect("customer login");
+
+    assert_eq!(principal.role, PrincipalRole::Customer);
+    assert_eq!(principal.ref_, "CUST-LOCAL");
+}
+
+#[tokio::test]
 async fn customer_login_fails_without_custom_code() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![CustomerRecord {
@@ -203,10 +263,15 @@ struct FakeSupplierLookup {
 impl SupplierLookup for FakeSupplierLookup {
     async fn search_suppliers(
         &self,
-        _query: &str,
+        query: &str,
         _limit: usize,
     ) -> Result<Vec<SupplierRecord>, AuthPortError> {
-        Ok(self.suppliers.clone())
+        Ok(self
+            .suppliers
+            .iter()
+            .filter(|record| supplier_matches_query(record, query))
+            .cloned()
+            .collect())
     }
 }
 
@@ -218,11 +283,32 @@ struct FakeCustomerLookup {
 impl CustomerLookup for FakeCustomerLookup {
     async fn search_customers(
         &self,
-        _query: &str,
+        query: &str,
         _limit: usize,
     ) -> Result<Vec<CustomerRecord>, AuthPortError> {
-        Ok(self.customers.clone())
+        Ok(self
+            .customers
+            .iter()
+            .filter(|record| customer_matches_query(record, query))
+            .cloned()
+            .collect())
     }
+}
+
+fn supplier_matches_query(record: &SupplierRecord, query: &str) -> bool {
+    query_matches_fields(query, [&record.id, &record.name, &record.phone])
+}
+
+fn customer_matches_query(record: &CustomerRecord, query: &str) -> bool {
+    query_matches_fields(query, [&record.id, &record.name, &record.phone])
+}
+
+fn query_matches_fields<const N: usize>(query: &str, fields: [&String; N]) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || fields
+            .iter()
+            .any(|field| field.to_lowercase().contains(&query))
 }
 
 #[derive(Default)]
