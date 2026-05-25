@@ -3,6 +3,7 @@ pub mod auth;
 pub mod authz;
 pub mod customer;
 pub mod gscale;
+pub mod production_map;
 pub mod profile;
 pub mod push;
 pub mod rps_batch;

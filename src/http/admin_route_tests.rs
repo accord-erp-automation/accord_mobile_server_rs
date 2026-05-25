@@ -17,6 +17,7 @@ use crate::core::admin::ports::{
 };
 use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
@@ -42,6 +43,7 @@ async fn admin_method_checks_happen_after_auth_like_go() {
     let cases = [
         ("PATCH", "/v1/mobile/admin/settings"),
         ("POST", "/v1/mobile/admin/roles"),
+        ("POST", "/v1/mobile/admin/production-maps"),
         ("POST", "/v1/mobile/admin/role-assignments"),
         ("PATCH", "/v1/mobile/admin/suppliers"),
         ("POST", "/v1/mobile/admin/suppliers/list"),
@@ -104,6 +106,64 @@ async fn admin_method_checks_happen_after_auth_like_go() {
             "method not allowed"
         );
     }
+}
+
+#[tokio::test]
+async fn admin_production_maps_save_compiles_program() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            r#"{
+                "id":"hotlunch-test",
+                "product_code":"HOTLUNCH",
+                "title":"Hotlunch test",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {
+                        "id":"formula",
+                        "kind":"formula",
+                        "title":"CPP hisob",
+                        "item_code":"CPP",
+                        "formula":{"target":"cpp_kg","expression":"order_qty * 1.08"}
+                    },
+                    {
+                        "id":"task",
+                        "kind":"task",
+                        "title":"Rezkaga yuborish",
+                        "role_code":"rezkachi"
+                    },
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[
+                    {"from":"start","to":"formula"},
+                    {"from":"formula","to":"task"},
+                    {"from":"task","to":"end"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["map"]["id"], "hotlunch-test");
+    assert_eq!(value["program"]["operations"][1]["op_code"], "calculate");
+    assert_eq!(
+        value["program"]["operations"][1]["args"]["expression"],
+        "order_qty * 1.08"
+    );
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("response");
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(json_body(list).await[0]["map"]["product_code"], "HOTLUNCH");
 }
 
 #[tokio::test]
@@ -1120,6 +1180,7 @@ fn test_state() -> AppState {
         .with_read_port(erp.clone())
         .with_write_port(erp)
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state
 }
 

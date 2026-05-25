@@ -91,6 +91,12 @@ pub(super) fn profile_lmdb_path(config: &AppConfig) -> std::path::PathBuf {
     )
 }
 
+pub(super) fn product_map_store_path() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_PRODUCTION_MAP_STORE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_production_maps.json"))
+}
+
 pub(super) fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
     match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
         LocalStoreBackend::Lmdb => {

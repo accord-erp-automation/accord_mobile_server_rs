@@ -7,6 +7,7 @@ use crate::core::admin::service::AdminService;
 use crate::core::auth::service::AuthService;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
+use crate::core::production_map::ProductionMapService;
 use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
 use crate::core::push::ports::PushTokenStorePort;
@@ -22,6 +23,7 @@ use crate::erpnext::client::ErpnextClient;
 use crate::fcm::discover_push_sender;
 use crate::rps::RpsDriverClient;
 use crate::store::admin_state_store::AdminSupplierStateBackend;
+use crate::store::production_map_store::ProductionMapStore;
 use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
 use crate::store::push_token_store::{LmdbPushTokenStore, PushTokenStore};
 use crate::store::role_store::RoleDefinitionStore;
@@ -39,6 +41,7 @@ pub struct AppState {
     pub auth: AuthService,
     pub customer: CustomerService,
     pub profiles: ProfileService,
+    pub production_maps: ProductionMapService,
     pub push: PushService,
     pub gscale: GscaleService,
     pub rps_batch: RpsBatchService,
@@ -55,6 +58,8 @@ impl AppState {
         admin = admin.with_auth_config_sink(Arc::new(auth.clone()));
         let mut customer = CustomerService::new();
         let profile_store = build_profile_store(&config);
+        let production_maps =
+            ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
         let push_token_store = build_push_token_store(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
@@ -222,6 +227,7 @@ impl AppState {
             auth,
             customer,
             profiles,
+            production_maps,
             push,
             gscale,
             rps_batch,
