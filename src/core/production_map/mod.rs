@@ -27,6 +27,10 @@ pub struct ProductionMapNode {
     pub role_code: String,
     #[serde(default)]
     pub item_code: String,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +39,7 @@ pub enum ProductionMapNodeKind {
     Start,
     Material,
     Formula,
+    Condition,
     Task,
     Wait,
     Output,
@@ -51,6 +56,8 @@ pub struct ProductionFormula {
 pub struct ProductionMapEdge {
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub branch: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +146,8 @@ pub enum ProductionMapError {
     UnknownFormulaVariable(String),
     #[error("formula division by zero")]
     FormulaDivisionByZero,
+    #[error("condition needs true and false branches")]
+    MissingConditionBranch,
     #[error("store failed")]
     StoreFailed,
 }
@@ -262,6 +271,12 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
         node.title = node.title.trim().to_string();
         node.role_code = node.role_code.trim().to_string();
         node.item_code = node.item_code.trim().to_string();
+        if !node.x.is_finite() {
+            node.x = 0.0;
+        }
+        if !node.y.is_finite() {
+            node.y = 0.0;
+        }
         if let Some(formula) = &mut node.formula {
             formula.target = formula.target.trim().to_string();
             formula.expression = formula.expression.trim().to_string();
@@ -270,6 +285,7 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
     for edge in &mut map.edges {
         edge.from = edge.from.trim().to_ascii_lowercase();
         edge.to = edge.to.trim().to_ascii_lowercase();
+        edge.branch = normalize_branch(&edge.branch);
     }
 }
 
@@ -307,6 +323,15 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
                 validate_formula_target(&formula.target)?;
                 validate_formula_expression(&formula.expression)?;
             }
+            ProductionMapNodeKind::Condition => {
+                let Some(formula) = &node.formula else {
+                    return Err(ProductionMapError::MissingFormulaExpression);
+                };
+                if formula.expression.trim().is_empty() {
+                    return Err(ProductionMapError::MissingFormulaExpression);
+                }
+                validate_condition_expression(&formula.expression)?;
+            }
             _ => {}
         }
     }
@@ -322,6 +347,23 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
         }
         if !ids.contains(edge.to.as_str()) {
             return Err(ProductionMapError::MissingEdgeNode(edge.to.clone()));
+        }
+    }
+    for node in &map.nodes {
+        if node.kind != ProductionMapNodeKind::Condition {
+            continue;
+        }
+        let mut has_true = false;
+        let mut has_false = false;
+        for edge in map.edges.iter().filter(|edge| edge.from == node.id) {
+            match normalize_branch(&edge.branch).as_str() {
+                "true" => has_true = true,
+                "false" => has_false = true,
+                _ => {}
+            }
+        }
+        if !has_true || !has_false {
+            return Err(ProductionMapError::MissingConditionBranch);
         }
     }
     Ok(())
@@ -348,6 +390,18 @@ fn validate_formula_expression(expression: &str) -> Result<(), ProductionMapErro
     }
 }
 
+fn validate_condition_expression(expression: &str) -> Result<(), ProductionMapError> {
+    evaluate_condition(expression, &BTreeMap::new())
+        .map(|_| ())
+        .or_else(|error| {
+            if matches!(error, ProductionMapError::UnknownFormulaVariable(_)) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
+}
+
 fn evaluate_formula(
     expression: &str,
     variables: &BTreeMap<String, f64>,
@@ -361,6 +415,62 @@ fn evaluate_formula(
         Err(ProductionMapError::InvalidFormulaExpression(
             expression.to_string(),
         ))
+    }
+}
+
+fn evaluate_condition(
+    expression: &str,
+    variables: &BTreeMap<String, f64>,
+) -> Result<bool, ProductionMapError> {
+    if let Some((left, operator, right)) = split_condition(expression) {
+        let left = evaluate_formula(left, variables)?;
+        let right = evaluate_formula(right, variables)?;
+        return match operator {
+            ">" => Ok(left > right),
+            ">=" => Ok(left >= right),
+            "<" => Ok(left < right),
+            "<=" => Ok(left <= right),
+            "==" => Ok((left - right).abs() < f64::EPSILON),
+            "!=" => Ok((left - right).abs() >= f64::EPSILON),
+            _ => Err(ProductionMapError::InvalidFormulaExpression(
+                expression.to_string(),
+            )),
+        };
+    }
+    Ok(evaluate_formula(expression, variables)? != 0.0)
+}
+
+fn split_condition(expression: &str) -> Option<(&str, &str, &str)> {
+    let mut depth = 0usize;
+    let bytes = expression.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => {
+                for operator in [">=", "<=", "==", "!=", ">", "<"] {
+                    if expression[index..].starts_with(operator) {
+                        let left = expression[..index].trim();
+                        let right = expression[index + operator.len()..].trim();
+                        if !left.is_empty() && !right.is_empty() {
+                            return Some((left, operator, right));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn normalize_branch(branch: &str) -> String {
+    match branch.trim().to_ascii_lowercase().as_str() {
+        "ha" | "yes" | "true" | "1" => "true".to_string(),
+        "yo'q" | "yoq" | "no" | "false" | "0" => "false".to_string(),
+        value => value.to_string(),
     }
 }
 
@@ -573,18 +683,34 @@ pub fn run_map(
     if order_qty <= 0.0 {
         return Err(ProductionMapError::InvalidOrderQty);
     }
-    let program = compile_map(map)?;
+    compile_map(map)?;
     let node_by_id: BTreeMap<&str, &ProductionMapNode> = map
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node))
         .collect();
+    let mut outgoing = BTreeMap::<&str, Vec<&ProductionMapEdge>>::new();
+    for edge in &map.edges {
+        outgoing.entry(edge.from.as_str()).or_default().push(edge);
+    }
     let mut variables = BTreeMap::from([("order_qty".to_string(), order_qty)]);
     let mut tasks = Vec::new();
-    for operation in &program.operations {
+    let Some(mut current_id) = map
+        .nodes
+        .iter()
+        .find(|node| node.kind == ProductionMapNodeKind::Start)
+        .map(|node| node.id.as_str())
+    else {
+        return Err(ProductionMapError::MissingStart);
+    };
+    let mut visited = BTreeSet::new();
+    while visited.insert(current_id.to_string()) {
         let node = node_by_id
-            .get(operation.node_id.as_str())
-            .expect("compiled operation only contains known node ids");
+            .get(current_id)
+            .expect("compiled map only contains known node ids");
+        if node.kind == ProductionMapNodeKind::End {
+            break;
+        }
         match node.kind {
             ProductionMapNodeKind::Formula => {
                 let Some(formula) = &node.formula else {
@@ -593,19 +719,46 @@ pub fn run_map(
                 let value = evaluate_formula(&formula.expression, &variables)?;
                 variables.insert(formula.target.clone(), value);
             }
+            ProductionMapNodeKind::Condition => {
+                let Some(formula) = &node.formula else {
+                    return Err(ProductionMapError::MissingFormulaExpression);
+                };
+                let result = evaluate_condition(&formula.expression, &variables)?;
+                variables.insert(node.id.clone(), if result { 1.0 } else { 0.0 });
+            }
             ProductionMapNodeKind::Material
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
             | ProductionMapNodeKind::Output => tasks.push(ProductionTaskDraft {
-                order: operation.order,
+                order: tasks.len() + 1,
                 node_id: node.id.clone(),
-                task_kind: operation.op_code.clone(),
+                task_kind: compile_node(tasks.len() + 1, node)?.op_code,
                 title: node.title.clone(),
                 role_code: node.role_code.clone(),
                 item_code: node.item_code.clone(),
                 qty: order_qty,
             }),
             ProductionMapNodeKind::Start | ProductionMapNodeKind::End => {}
+        }
+        let edges = outgoing.get(current_id).cloned().unwrap_or_default();
+        if node.kind == ProductionMapNodeKind::Condition {
+            let branch = if variables.get(&node.id).copied().unwrap_or(0.0) != 0.0 {
+                "true"
+            } else {
+                "false"
+            };
+            let Some(next) = edges
+                .into_iter()
+                .find(|edge| normalize_branch(&edge.branch) == branch)
+            else {
+                return Err(ProductionMapError::MissingConditionBranch);
+            };
+            current_id = next.to.as_str();
+        } else {
+            let Some(next) = edges.first() else {
+                break;
+            };
+            current_id = next.to.as_str();
         }
     }
     Ok(ProductionMapRunResult {
@@ -680,6 +833,13 @@ fn compile_node(
             args.insert("expression".to_string(), formula.expression.clone());
             "calculate"
         }
+        ProductionMapNodeKind::Condition => {
+            let Some(formula) = &node.formula else {
+                return Err(ProductionMapError::MissingFormulaExpression);
+            };
+            args.insert("expression".to_string(), formula.expression.clone());
+            "condition"
+        }
         ProductionMapNodeKind::Task => "create_task",
         ProductionMapNodeKind::Wait => "wait_dependency",
         ProductionMapNodeKind::Output => "produce_output",
@@ -721,6 +881,7 @@ mod tests {
         map.edges.push(ProductionMapEdge {
             from: "task".to_string(),
             to: "formula".to_string(),
+            branch: String::new(),
         });
 
         assert_eq!(compile_map(&map), Err(ProductionMapError::Cycle));
@@ -755,6 +916,20 @@ mod tests {
         assert_eq!(result.tasks[0].qty, 100.0);
     }
 
+    #[test]
+    fn run_map_follows_condition_branch() {
+        let result = run_map(&condition_map(), 120.0).expect("run map");
+
+        assert_eq!(result.variables.get("large_order"), Some(&1.0));
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].node_id, "large_task");
+
+        let result = run_map(&condition_map(), 60.0).expect("run map");
+        assert_eq!(result.variables.get("large_order"), Some(&0.0));
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].node_id, "small_task");
+    }
+
     fn sample_map() -> ProductionMapDefinition {
         ProductionMapDefinition {
             id: "hotlunch-test".to_string(),
@@ -768,6 +943,8 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ProductionMapNode {
                     id: "formula".to_string(),
@@ -779,6 +956,8 @@ mod tests {
                     }),
                     role_code: String::new(),
                     item_code: "CPP".to_string(),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ProductionMapNode {
                     id: "task".to_string(),
@@ -787,6 +966,8 @@ mod tests {
                     formula: None,
                     role_code: "rezkachi".to_string(),
                     item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
                 },
                 ProductionMapNode {
                     id: "end".to_string(),
@@ -795,20 +976,115 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
                 },
             ],
             edges: vec![
                 ProductionMapEdge {
                     from: "start".to_string(),
                     to: "formula".to_string(),
+                    branch: String::new(),
                 },
                 ProductionMapEdge {
                     from: "formula".to_string(),
                     to: "task".to_string(),
+                    branch: String::new(),
                 },
                 ProductionMapEdge {
                     from: "task".to_string(),
                     to: "end".to_string(),
+                    branch: String::new(),
+                },
+            ],
+        }
+    }
+
+    fn condition_map() -> ProductionMapDefinition {
+        ProductionMapDefinition {
+            id: "branch-test".to_string(),
+            product_code: "HOTLUNCH".to_string(),
+            title: "Branch test".to_string(),
+            nodes: vec![
+                ProductionMapNode {
+                    id: "start".to_string(),
+                    kind: ProductionMapNodeKind::Start,
+                    title: "Start".to_string(),
+                    formula: None,
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                ProductionMapNode {
+                    id: "large_order".to_string(),
+                    kind: ProductionMapNodeKind::Condition,
+                    title: "Katta partiyami".to_string(),
+                    formula: Some(ProductionFormula {
+                        target: String::new(),
+                        expression: "order_qty >= 100".to_string(),
+                    }),
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                ProductionMapNode {
+                    id: "large_task".to_string(),
+                    kind: ProductionMapNodeKind::Task,
+                    title: "Katta partiya".to_string(),
+                    formula: None,
+                    role_code: "rezkachi".to_string(),
+                    item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                ProductionMapNode {
+                    id: "small_task".to_string(),
+                    kind: ProductionMapNodeKind::Task,
+                    title: "Oddiy partiya".to_string(),
+                    formula: None,
+                    role_code: "operator".to_string(),
+                    item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                ProductionMapNode {
+                    id: "end".to_string(),
+                    kind: ProductionMapNodeKind::End,
+                    title: "End".to_string(),
+                    formula: None,
+                    role_code: String::new(),
+                    item_code: String::new(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            edges: vec![
+                ProductionMapEdge {
+                    from: "start".to_string(),
+                    to: "large_order".to_string(),
+                    branch: String::new(),
+                },
+                ProductionMapEdge {
+                    from: "large_order".to_string(),
+                    to: "large_task".to_string(),
+                    branch: "true".to_string(),
+                },
+                ProductionMapEdge {
+                    from: "large_order".to_string(),
+                    to: "small_task".to_string(),
+                    branch: "false".to_string(),
+                },
+                ProductionMapEdge {
+                    from: "large_task".to_string(),
+                    to: "end".to_string(),
+                    branch: String::new(),
+                },
+                ProductionMapEdge {
+                    from: "small_task".to_string(),
+                    to: "end".to_string(),
+                    branch: String::new(),
                 },
             ],
         }

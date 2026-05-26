@@ -93,6 +93,8 @@ mod tests {
                         formula: None,
                         role_code: String::new(),
                         item_code: String::new(),
+                        x: 0.0,
+                        y: 0.0,
                     },
                     ProductionMapNode {
                         id: "end".to_string(),
@@ -101,11 +103,14 @@ mod tests {
                         formula: None,
                         role_code: String::new(),
                         item_code: String::new(),
+                        x: 0.0,
+                        y: 0.0,
                     },
                 ],
                 edges: vec![crate::core::production_map::ProductionMapEdge {
                     from: "start".to_string(),
                     to: "end".to_string(),
+                    branch: String::new(),
                 }],
             })
             .await
