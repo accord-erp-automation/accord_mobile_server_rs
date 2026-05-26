@@ -171,19 +171,6 @@ impl CatalogCacheStore {
         })
     }
 
-    #[cfg(test)]
-    pub fn in_memory() -> Result<Self, CatalogCacheError> {
-        let conn = Connection::open_in_memory()?;
-        configure_catalog_connection(&conn)?;
-        schema::migrate(&conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-            read_conns: Vec::new(),
-            next_read_conn: AtomicUsize::new(0),
-            ready: AtomicBool::new(false),
-        })
-    }
-
     pub fn mark_ready(&self) {
         self.ready.store(true, Ordering::Release);
     }

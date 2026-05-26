@@ -298,14 +298,6 @@ pub fn role_assignment_key(role: &PrincipalRole, ref_: &str) -> String {
     format!("{}:{}", role_key(role), ref_.trim())
 }
 
-pub fn capabilities_for_role(role: PrincipalRole) -> Vec<Capability> {
-    capability_catalog()
-        .iter()
-        .filter(|definition| definition.default_roles.contains(&role))
-        .map(|definition| definition.capability)
-        .collect()
-}
-
 pub fn capability_codes_for_role(role: PrincipalRole) -> Vec<String> {
     capability_catalog()
         .iter()
