@@ -37,6 +37,7 @@ pub enum Capability {
     CustomerCodeManage,
     AdminActivityRead,
     WerkaCodeManage,
+    ProductionMapManage,
     GscaleCatalogRead,
     GscalePrint,
     RpsBatchManage,

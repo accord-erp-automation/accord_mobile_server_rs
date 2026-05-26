@@ -159,6 +159,12 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         default_roles: ADMIN_ONLY,
     },
     CapabilityDefinition {
+        capability: Capability::ProductionMapManage,
+        code: "production.map.manage",
+        label: "Production map manage",
+        default_roles: ADMIN_ONLY,
+    },
+    CapabilityDefinition {
         capability: Capability::GscaleCatalogRead,
         code: "gscale.catalog.read",
         label: "GScale catalog read",

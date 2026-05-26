@@ -167,6 +167,64 @@ async fn admin_production_maps_save_compiles_program() {
 }
 
 #[tokio::test]
+async fn production_map_manage_capability_can_save_maps() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/roles",
+            &admin_token,
+            r#"{
+                "id":"production_mapper",
+                "label":"Production mapper",
+                "capability_codes":["production.map.manage"]
+            }"#,
+        ))
+        .await
+        .expect("role response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"werka",
+                "principal_ref":"werka",
+                "role_id":"production_mapper"
+            }"#,
+        ))
+        .await
+        .expect("assignment response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mapper_token = session_for(&state, PrincipalRole::Werka, "werka").await;
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &mapper_token,
+            r#"{
+                "id":"hotlunch-test",
+                "product_code":"HOTLUNCH",
+                "title":"Hotlunch test",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[{"from":"start","to":"end"}]
+            }"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn admin_settings_returns_config_shape_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;

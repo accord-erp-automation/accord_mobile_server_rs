@@ -96,6 +96,10 @@ pub enum ProductionMapError {
     MissingFormulaTarget,
     #[error("formula expression is required")]
     MissingFormulaExpression,
+    #[error("invalid formula target: {0}")]
+    InvalidFormulaTarget(String),
+    #[error("invalid formula expression: {0}")]
+    InvalidFormulaExpression(String),
     #[error("store failed")]
     StoreFailed,
 }
@@ -242,6 +246,8 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
                 if formula.expression.trim().is_empty() {
                     return Err(ProductionMapError::MissingFormulaExpression);
                 }
+                validate_formula_target(&formula.target)?;
+                validate_formula_expression(&formula.expression)?;
             }
             _ => {}
         }
@@ -261,6 +267,152 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
         }
     }
     Ok(())
+}
+
+fn validate_formula_target(target: &str) -> Result<(), ProductionMapError> {
+    if is_identifier(target.trim()) {
+        Ok(())
+    } else {
+        Err(ProductionMapError::InvalidFormulaTarget(target.to_string()))
+    }
+}
+
+fn validate_formula_expression(expression: &str) -> Result<(), ProductionMapError> {
+    let mut parser = FormulaParser::new(expression);
+    parser.parse_expression()?;
+    parser.skip_whitespace();
+    if parser.is_eof() {
+        Ok(())
+    } else {
+        Err(ProductionMapError::InvalidFormulaExpression(
+            expression.to_string(),
+        ))
+    }
+}
+
+fn is_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+struct FormulaParser<'a> {
+    input: &'a str,
+    position: usize,
+}
+
+impl<'a> FormulaParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { input, position: 0 }
+    }
+
+    fn parse_expression(&mut self) -> Result<(), ProductionMapError> {
+        self.parse_term()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('+') || self.consume('-') {
+                self.parse_term()?;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    fn parse_term(&mut self) -> Result<(), ProductionMapError> {
+        self.parse_factor()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('*') || self.consume('/') {
+                self.parse_factor()?;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    fn parse_factor(&mut self) -> Result<(), ProductionMapError> {
+        self.skip_whitespace();
+        if self.consume('-') {
+            return self.parse_factor();
+        }
+        if self.consume('(') {
+            self.parse_expression()?;
+            self.skip_whitespace();
+            return if self.consume(')') {
+                Ok(())
+            } else {
+                self.invalid()
+            };
+        }
+        if self.parse_identifier() || self.parse_number() {
+            Ok(())
+        } else {
+            self.invalid()
+        }
+    }
+
+    fn parse_identifier(&mut self) -> bool {
+        let start = self.position;
+        while let Some(ch) = self.peek() {
+            if self.position == start {
+                if ch.is_ascii_alphabetic() || ch == '_' {
+                    self.position += ch.len_utf8();
+                } else {
+                    break;
+                }
+            } else if ch.is_ascii_alphanumeric() || ch == '_' {
+                self.position += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        self.position > start
+    }
+
+    fn parse_number(&mut self) -> bool {
+        let start = self.position;
+        while matches!(self.peek(), Some(ch) if ch.is_ascii_digit()) {
+            self.position += 1;
+        }
+        if self.consume('.') {
+            while matches!(self.peek(), Some(ch) if ch.is_ascii_digit()) {
+                self.position += 1;
+            }
+        }
+        self.position > start
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(ch) if ch.is_ascii_whitespace()) {
+            self.position += 1;
+        }
+    }
+
+    fn consume(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.position += expected.len_utf8();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.input[self.position..].chars().next()
+    }
+
+    fn is_eof(&self) -> bool {
+        self.position >= self.input.len()
+    }
+
+    fn invalid<T>(&self) -> Result<T, ProductionMapError> {
+        Err(ProductionMapError::InvalidFormulaExpression(
+            self.input.to_string(),
+        ))
+    }
 }
 
 fn topological_order(map: &ProductionMapDefinition) -> Result<Vec<String>, ProductionMapError> {
@@ -370,6 +522,22 @@ mod tests {
         });
 
         assert_eq!(compile_map(&map), Err(ProductionMapError::Cycle));
+    }
+
+    #[test]
+    fn compile_map_rejects_invalid_formula_expression() {
+        let mut map = sample_map();
+        map.nodes[1].formula = Some(ProductionFormula {
+            target: "cpp_kg".to_string(),
+            expression: "order_qty; drop".to_string(),
+        });
+
+        assert_eq!(
+            compile_map(&map),
+            Err(ProductionMapError::InvalidFormulaExpression(
+                "order_qty; drop".to_string()
+            ))
+        );
     }
 
     fn sample_map() -> ProductionMapDefinition {
