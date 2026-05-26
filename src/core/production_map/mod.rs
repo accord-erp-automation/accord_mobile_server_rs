@@ -74,6 +74,37 @@ pub struct ProductionMapSaved {
     pub program: ProductionMapProgram,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapRunRequest {
+    #[serde(default)]
+    pub map_id: String,
+    #[serde(default)]
+    pub product_code: String,
+    pub order_qty: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionTaskDraft {
+    pub order: usize,
+    pub node_id: String,
+    pub task_kind: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role_code: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub item_code: String,
+    pub qty: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapRunResult {
+    pub map_id: String,
+    pub product_code: String,
+    pub order_qty: f64,
+    pub variables: BTreeMap<String, f64>,
+    pub tasks: Vec<ProductionTaskDraft>,
+}
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ProductionMapError {
     #[error("map id is required")]
@@ -100,6 +131,14 @@ pub enum ProductionMapError {
     InvalidFormulaTarget(String),
     #[error("invalid formula expression: {0}")]
     InvalidFormulaExpression(String),
+    #[error("map not found")]
+    MapNotFound,
+    #[error("order quantity must be positive")]
+    InvalidOrderQty,
+    #[error("unknown formula variable: {0}")]
+    UnknownFormulaVariable(String),
+    #[error("formula division by zero")]
+    FormulaDivisionByZero,
     #[error("store failed")]
     StoreFailed,
 }
@@ -168,6 +207,25 @@ impl ProductionMapService {
         let program = compile_map(&map)?;
         self.store.put_map(map.clone()).await?;
         Ok(ProductionMapSaved { map, program })
+    }
+
+    pub async fn run_map(
+        &self,
+        input: ProductionMapRunRequest,
+    ) -> Result<ProductionMapRunResult, ProductionMapError> {
+        if input.order_qty <= 0.0 {
+            return Err(ProductionMapError::InvalidOrderQty);
+        }
+        let map_id = input.map_id.trim().to_ascii_lowercase();
+        let product_code = input.product_code.trim();
+        let maps = self.store.maps().await?;
+        let Some(map) = maps.into_iter().find(|map| {
+            (!map_id.is_empty() && map.id == map_id)
+                || (!product_code.is_empty() && map.product_code == product_code)
+        }) else {
+            return Err(ProductionMapError::MapNotFound);
+        };
+        run_map(&map, input.order_qty)
     }
 }
 
@@ -290,6 +348,22 @@ fn validate_formula_expression(expression: &str) -> Result<(), ProductionMapErro
     }
 }
 
+fn evaluate_formula(
+    expression: &str,
+    variables: &BTreeMap<String, f64>,
+) -> Result<f64, ProductionMapError> {
+    let mut parser = FormulaParser::new(expression);
+    let value = parser.evaluate_expression(variables)?;
+    parser.skip_whitespace();
+    if parser.is_eof() {
+        Ok(value)
+    } else {
+        Err(ProductionMapError::InvalidFormulaExpression(
+            expression.to_string(),
+        ))
+    }
+}
+
 fn is_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -321,6 +395,23 @@ impl<'a> FormulaParser<'a> {
         }
     }
 
+    fn evaluate_expression(
+        &mut self,
+        variables: &BTreeMap<String, f64>,
+    ) -> Result<f64, ProductionMapError> {
+        let mut value = self.evaluate_term(variables)?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('+') {
+                value += self.evaluate_term(variables)?;
+            } else if self.consume('-') {
+                value -= self.evaluate_term(variables)?;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
     fn parse_term(&mut self) -> Result<(), ProductionMapError> {
         self.parse_factor()?;
         loop {
@@ -329,6 +420,27 @@ impl<'a> FormulaParser<'a> {
                 self.parse_factor()?;
             } else {
                 return Ok(());
+            }
+        }
+    }
+
+    fn evaluate_term(
+        &mut self,
+        variables: &BTreeMap<String, f64>,
+    ) -> Result<f64, ProductionMapError> {
+        let mut value = self.evaluate_factor(variables)?;
+        loop {
+            self.skip_whitespace();
+            if self.consume('*') {
+                value *= self.evaluate_factor(variables)?;
+            } else if self.consume('/') {
+                let divisor = self.evaluate_factor(variables)?;
+                if divisor == 0.0 {
+                    return Err(ProductionMapError::FormulaDivisionByZero);
+                }
+                value /= divisor;
+            } else {
+                return Ok(value);
             }
         }
     }
@@ -354,7 +466,40 @@ impl<'a> FormulaParser<'a> {
         }
     }
 
+    fn evaluate_factor(
+        &mut self,
+        variables: &BTreeMap<String, f64>,
+    ) -> Result<f64, ProductionMapError> {
+        self.skip_whitespace();
+        if self.consume('-') {
+            return Ok(-self.evaluate_factor(variables)?);
+        }
+        if self.consume('(') {
+            let value = self.evaluate_expression(variables)?;
+            self.skip_whitespace();
+            return if self.consume(')') {
+                Ok(value)
+            } else {
+                self.invalid()
+            };
+        }
+        if let Some(identifier) = self.read_identifier() {
+            return variables
+                .get(&identifier)
+                .copied()
+                .ok_or(ProductionMapError::UnknownFormulaVariable(identifier));
+        }
+        if let Some(number) = self.read_number() {
+            return Ok(number);
+        }
+        self.invalid()
+    }
+
     fn parse_identifier(&mut self) -> bool {
+        self.read_identifier().is_some()
+    }
+
+    fn read_identifier(&mut self) -> Option<String> {
         let start = self.position;
         while let Some(ch) = self.peek() {
             if self.position == start {
@@ -369,10 +514,14 @@ impl<'a> FormulaParser<'a> {
                 break;
             }
         }
-        self.position > start
+        (self.position > start).then(|| self.input[start..self.position].to_string())
     }
 
     fn parse_number(&mut self) -> bool {
+        self.read_number().is_some()
+    }
+
+    fn read_number(&mut self) -> Option<f64> {
         let start = self.position;
         while matches!(self.peek(), Some(ch) if ch.is_ascii_digit()) {
             self.position += 1;
@@ -382,7 +531,9 @@ impl<'a> FormulaParser<'a> {
                 self.position += 1;
             }
         }
-        self.position > start
+        (self.position > start)
+            .then(|| self.input[start..self.position].parse::<f64>().ok())
+            .flatten()
     }
 
     fn skip_whitespace(&mut self) {
@@ -413,6 +564,57 @@ impl<'a> FormulaParser<'a> {
             self.input.to_string(),
         ))
     }
+}
+
+pub fn run_map(
+    map: &ProductionMapDefinition,
+    order_qty: f64,
+) -> Result<ProductionMapRunResult, ProductionMapError> {
+    if order_qty <= 0.0 {
+        return Err(ProductionMapError::InvalidOrderQty);
+    }
+    let program = compile_map(map)?;
+    let node_by_id: BTreeMap<&str, &ProductionMapNode> = map
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut variables = BTreeMap::from([("order_qty".to_string(), order_qty)]);
+    let mut tasks = Vec::new();
+    for operation in &program.operations {
+        let node = node_by_id
+            .get(operation.node_id.as_str())
+            .expect("compiled operation only contains known node ids");
+        match node.kind {
+            ProductionMapNodeKind::Formula => {
+                let Some(formula) = &node.formula else {
+                    return Err(ProductionMapError::MissingFormulaExpression);
+                };
+                let value = evaluate_formula(&formula.expression, &variables)?;
+                variables.insert(formula.target.clone(), value);
+            }
+            ProductionMapNodeKind::Material
+            | ProductionMapNodeKind::Task
+            | ProductionMapNodeKind::Wait
+            | ProductionMapNodeKind::Output => tasks.push(ProductionTaskDraft {
+                order: operation.order,
+                node_id: node.id.clone(),
+                task_kind: operation.op_code.clone(),
+                title: node.title.clone(),
+                role_code: node.role_code.clone(),
+                item_code: node.item_code.clone(),
+                qty: order_qty,
+            }),
+            ProductionMapNodeKind::Start | ProductionMapNodeKind::End => {}
+        }
+    }
+    Ok(ProductionMapRunResult {
+        map_id: map.id.clone(),
+        product_code: map.product_code.clone(),
+        order_qty,
+        variables,
+        tasks,
+    })
 }
 
 fn topological_order(map: &ProductionMapDefinition) -> Result<Vec<String>, ProductionMapError> {
@@ -538,6 +740,19 @@ mod tests {
                 "order_qty; drop".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn run_map_evaluates_formulas_and_generates_task_drafts() {
+        let result = run_map(&sample_map(), 100.0).expect("run map");
+
+        assert_eq!(result.map_id, "hotlunch-test");
+        assert_eq!(result.variables.get("order_qty"), Some(&100.0));
+        assert_eq!(result.variables.get("cpp_kg"), Some(&108.0));
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].task_kind, "create_task");
+        assert_eq!(result.tasks[0].role_code, "rezkachi");
+        assert_eq!(result.tasks[0].qty, 100.0);
     }
 
     fn sample_map() -> ProductionMapDefinition {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::production_map::ProductionMapDefinition;
+use crate::core::production_map::{ProductionMapDefinition, ProductionMapRunRequest};
 
 pub async fn production_maps(
     State(state): State<AppState>,
@@ -31,5 +31,27 @@ pub async fn production_maps(
             }
         }
         _ => Err(method_not_allowed()),
+    }
+}
+
+pub async fn production_map_run(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if method != Method::POST {
+        return Err(method_not_allowed());
+    }
+    let input: ProductionMapRunRequest = parse_json(&body)?;
+    match state.production_maps.run_map(input).await {
+        Ok(result) => Ok(json_response(result)),
+        Err(error) => Err(bad_request(error.to_string())),
     }
 }

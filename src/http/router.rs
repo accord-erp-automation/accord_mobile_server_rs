@@ -120,6 +120,10 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_maps),
         )
         .route(
+            "/v1/mobile/admin/production-maps/run",
+            any(admin::production_map_run),
+        )
+        .route(
             "/v1/mobile/admin/role-assignments",
             any(admin::role_assignments),
         )
