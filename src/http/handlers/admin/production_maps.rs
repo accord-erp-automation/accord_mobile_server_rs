@@ -7,7 +7,12 @@ pub async fn production_maps(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    authorize_any_capability(&state, &headers, &[Capability::ProductionMapManage]).await?;
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
     if !matches!(method, Method::GET | Method::PUT) {
         return Err(method_not_allowed());
     }
