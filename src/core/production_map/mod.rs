@@ -122,6 +122,12 @@ pub struct ProductionMapRunResult {
     pub order_qty: f64,
     pub variables: BTreeMap<String, f64>,
     pub tasks: Vec<ProductionTaskDraft>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub awaiting_node_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub awaiting_variable: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub awaiting_expression: String,
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -154,6 +160,10 @@ pub enum ProductionMapError {
     MapNotFound,
     #[error("order quantity must be positive")]
     InvalidOrderQty,
+    #[error("node quantity must be positive: {0}")]
+    InvalidNodeQty(String),
+    #[error("invalid location: {0}")]
+    InvalidLocation(String),
     #[error("unknown formula variable: {0}")]
     UnknownFormulaVariable(String),
     #[error("formula division by zero")]
@@ -356,6 +366,8 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
                 }
             }
         }
+        validate_location_ref(&node.from_location)?;
+        validate_location_ref(&node.to_location)?;
     }
     if start_count != 1 {
         return Err(ProductionMapError::MissingStart);
@@ -396,6 +408,25 @@ fn validate_formula_target(target: &str) -> Result<(), ProductionMapError> {
         Ok(())
     } else {
         Err(ProductionMapError::InvalidFormulaTarget(target.to_string()))
+    }
+}
+
+fn validate_location_ref(location: &str) -> Result<(), ProductionMapError> {
+    let location = location.trim();
+    if location.is_empty() {
+        return Ok(());
+    }
+    let valid = location.len() <= 120
+        && location.chars().any(char::is_alphanumeric)
+        && location.chars().all(|ch| {
+            ch.is_alphanumeric()
+                || ch.is_whitespace()
+                || matches!(ch, '-' | '_' | '.' | '/' | '(' | ')')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(ProductionMapError::InvalidLocation(location.to_string()))
     }
 }
 
@@ -753,7 +784,22 @@ pub fn run_map_with_variables(
                 let Some(formula) = &node.formula else {
                     return Err(ProductionMapError::MissingFormulaExpression);
                 };
-                let result = evaluate_condition(&formula.expression, &variables)?;
+                let result = match evaluate_condition(&formula.expression, &variables) {
+                    Ok(result) => result,
+                    Err(ProductionMapError::UnknownFormulaVariable(variable)) => {
+                        return Ok(ProductionMapRunResult {
+                            map_id: map.id.clone(),
+                            product_code: map.product_code.clone(),
+                            order_qty,
+                            variables,
+                            tasks,
+                            awaiting_node_id: node.id.clone(),
+                            awaiting_variable: variable,
+                            awaiting_expression: formula.expression.clone(),
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
                 variables.insert(node.id.clone(), if result { 1.0 } else { 0.0 });
             }
             ProductionMapNodeKind::Material
@@ -802,6 +848,9 @@ pub fn run_map_with_variables(
         order_qty,
         variables,
         tasks,
+        awaiting_node_id: String::new(),
+        awaiting_variable: String::new(),
+        awaiting_expression: String::new(),
     })
 }
 
@@ -815,10 +864,16 @@ fn node_qty(
     order_qty: f64,
     variables: &BTreeMap<String, f64>,
 ) -> Result<f64, ProductionMapError> {
-    if node.qty_formula.trim().is_empty() {
-        return Ok(order_qty);
+    let qty = if node.qty_formula.trim().is_empty() {
+        order_qty
+    } else {
+        evaluate_formula(&node.qty_formula, variables)?
+    };
+    if qty.is_finite() && qty > 0.0 {
+        Ok(qty)
+    } else {
+        Err(ProductionMapError::InvalidNodeQty(node.id.clone()))
     }
-    evaluate_formula(&node.qty_formula, variables)
 }
 
 fn topological_order(map: &ProductionMapDefinition) -> Result<Vec<String>, ProductionMapError> {
@@ -1008,6 +1063,7 @@ mod tests {
         .expect("run map with ok result");
 
         assert_eq!(result.variables.get("pechat_ok"), Some(&1.0));
+        assert!(result.awaiting_variable.is_empty());
         assert_eq!(result.tasks[0].node_id, "large_task");
 
         let result = run_map_with_variables(
@@ -1017,6 +1073,33 @@ mod tests {
         )
         .expect("run map with failed result");
         assert_eq!(result.tasks[0].node_id, "small_task");
+    }
+
+    #[test]
+    fn run_map_stops_at_condition_when_runtime_variable_is_missing() {
+        let mut map = condition_map();
+        map.nodes[1].formula = Some(ProductionFormula {
+            target: String::new(),
+            expression: "pechat_ok == 1".to_string(),
+        });
+
+        let result = run_map(&map, 100.0).expect("run map waiting for variable");
+
+        assert_eq!(result.tasks.len(), 0);
+        assert_eq!(result.awaiting_node_id, "large_order");
+        assert_eq!(result.awaiting_variable, "pechat_ok");
+        assert_eq!(result.awaiting_expression, "pechat_ok == 1");
+    }
+
+    #[test]
+    fn run_map_rejects_non_positive_node_qty() {
+        let mut map = sample_map();
+        map.nodes[2].qty_formula = "order_qty - 100".to_string();
+
+        assert_eq!(
+            run_map(&map, 100.0),
+            Err(ProductionMapError::InvalidNodeQty("task".to_string()))
+        );
     }
 
     fn sample_map() -> ProductionMapDefinition {
