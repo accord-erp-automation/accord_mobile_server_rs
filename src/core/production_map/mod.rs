@@ -27,6 +27,12 @@ pub struct ProductionMapNode {
     pub role_code: String,
     #[serde(default)]
     pub item_code: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub qty_formula: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_location: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to_location: String,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -88,6 +94,8 @@ pub struct ProductionMapRunRequest {
     #[serde(default)]
     pub product_code: String,
     pub order_qty: f64,
+    #[serde(default)]
+    pub variables: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +108,10 @@ pub struct ProductionTaskDraft {
     pub role_code: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item_code: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from_location: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to_location: String,
     pub qty: f64,
 }
 
@@ -234,7 +246,7 @@ impl ProductionMapService {
         }) else {
             return Err(ProductionMapError::MapNotFound);
         };
-        run_map(&map, input.order_qty)
+        run_map_with_variables(&map, input.order_qty, input.variables)
     }
 }
 
@@ -271,6 +283,9 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
         node.title = node.title.trim().to_string();
         node.role_code = node.role_code.trim().to_string();
         node.item_code = node.item_code.trim().to_string();
+        node.qty_formula = node.qty_formula.trim().to_string();
+        node.from_location = node.from_location.trim().to_string();
+        node.to_location = node.to_location.trim().to_string();
         if !node.x.is_finite() {
             node.x = 0.0;
         }
@@ -332,7 +347,14 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
                 }
                 validate_condition_expression(&formula.expression)?;
             }
-            _ => {}
+            ProductionMapNodeKind::Material
+            | ProductionMapNodeKind::Task
+            | ProductionMapNodeKind::Wait
+            | ProductionMapNodeKind::Output => {
+                if !node.qty_formula.trim().is_empty() {
+                    validate_formula_expression(&node.qty_formula)?;
+                }
+            }
         }
     }
     if start_count != 1 {
@@ -680,6 +702,14 @@ pub fn run_map(
     map: &ProductionMapDefinition,
     order_qty: f64,
 ) -> Result<ProductionMapRunResult, ProductionMapError> {
+    run_map_with_variables(map, order_qty, BTreeMap::new())
+}
+
+pub fn run_map_with_variables(
+    map: &ProductionMapDefinition,
+    order_qty: f64,
+    run_variables: BTreeMap<String, f64>,
+) -> Result<ProductionMapRunResult, ProductionMapError> {
     if order_qty <= 0.0 {
         return Err(ProductionMapError::InvalidOrderQty);
     }
@@ -693,7 +723,7 @@ pub fn run_map(
     for edge in &map.edges {
         outgoing.entry(edge.from.as_str()).or_default().push(edge);
     }
-    let mut variables = BTreeMap::from([("order_qty".to_string(), order_qty)]);
+    let mut variables = input_variables(order_qty, run_variables);
     let mut tasks = Vec::new();
     let Some(mut current_id) = map
         .nodes
@@ -729,15 +759,20 @@ pub fn run_map(
             ProductionMapNodeKind::Material
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
-            | ProductionMapNodeKind::Output => tasks.push(ProductionTaskDraft {
-                order: tasks.len() + 1,
-                node_id: node.id.clone(),
-                task_kind: compile_node(tasks.len() + 1, node)?.op_code,
-                title: node.title.clone(),
-                role_code: node.role_code.clone(),
-                item_code: node.item_code.clone(),
-                qty: order_qty,
-            }),
+            | ProductionMapNodeKind::Output => {
+                let qty = node_qty(node, order_qty, &variables)?;
+                tasks.push(ProductionTaskDraft {
+                    order: tasks.len() + 1,
+                    node_id: node.id.clone(),
+                    task_kind: compile_node(tasks.len() + 1, node)?.op_code,
+                    title: node.title.clone(),
+                    role_code: node.role_code.clone(),
+                    item_code: node.item_code.clone(),
+                    from_location: node.from_location.clone(),
+                    to_location: node.to_location.clone(),
+                    qty,
+                })
+            }
             ProductionMapNodeKind::Start | ProductionMapNodeKind::End => {}
         }
         let edges = outgoing.get(current_id).cloned().unwrap_or_default();
@@ -768,6 +803,22 @@ pub fn run_map(
         variables,
         tasks,
     })
+}
+
+fn input_variables(order_qty: f64, mut variables: BTreeMap<String, f64>) -> BTreeMap<String, f64> {
+    variables.insert("order_qty".to_string(), order_qty);
+    variables
+}
+
+fn node_qty(
+    node: &ProductionMapNode,
+    order_qty: f64,
+    variables: &BTreeMap<String, f64>,
+) -> Result<f64, ProductionMapError> {
+    if node.qty_formula.trim().is_empty() {
+        return Ok(order_qty);
+    }
+    evaluate_formula(&node.qty_formula, variables)
 }
 
 fn topological_order(map: &ProductionMapDefinition) -> Result<Vec<String>, ProductionMapError> {
@@ -821,6 +872,15 @@ fn compile_node(
     }
     if !node.item_code.is_empty() {
         args.insert("item_code".to_string(), node.item_code.clone());
+    }
+    if !node.qty_formula.is_empty() {
+        args.insert("qty_formula".to_string(), node.qty_formula.clone());
+    }
+    if !node.from_location.is_empty() {
+        args.insert("from_location".to_string(), node.from_location.clone());
+    }
+    if !node.to_location.is_empty() {
+        args.insert("to_location".to_string(), node.to_location.clone());
     }
     let op_code = match node.kind {
         ProductionMapNodeKind::Start => "start",
@@ -913,7 +973,9 @@ mod tests {
         assert_eq!(result.tasks.len(), 1);
         assert_eq!(result.tasks[0].task_kind, "create_task");
         assert_eq!(result.tasks[0].role_code, "rezkachi");
-        assert_eq!(result.tasks[0].qty, 100.0);
+        assert_eq!(result.tasks[0].qty, 108.0);
+        assert_eq!(result.tasks[0].from_location, "CPP ombor");
+        assert_eq!(result.tasks[0].to_location, "Rezka apparat");
     }
 
     #[test]
@@ -930,6 +992,33 @@ mod tests {
         assert_eq!(result.tasks[0].node_id, "small_task");
     }
 
+    #[test]
+    fn run_map_conditions_can_use_runtime_variables() {
+        let mut map = condition_map();
+        map.nodes[1].formula = Some(ProductionFormula {
+            target: String::new(),
+            expression: "pechat_ok == 1".to_string(),
+        });
+
+        let result = run_map_with_variables(
+            &map,
+            100.0,
+            BTreeMap::from([("pechat_ok".to_string(), 1.0)]),
+        )
+        .expect("run map with ok result");
+
+        assert_eq!(result.variables.get("pechat_ok"), Some(&1.0));
+        assert_eq!(result.tasks[0].node_id, "large_task");
+
+        let result = run_map_with_variables(
+            &map,
+            100.0,
+            BTreeMap::from([("pechat_ok".to_string(), 0.0)]),
+        )
+        .expect("run map with failed result");
+        assert_eq!(result.tasks[0].node_id, "small_task");
+    }
+
     fn sample_map() -> ProductionMapDefinition {
         ProductionMapDefinition {
             id: "hotlunch-test".to_string(),
@@ -943,6 +1032,9 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -956,6 +1048,9 @@ mod tests {
                     }),
                     role_code: String::new(),
                     item_code: "CPP".to_string(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -966,6 +1061,9 @@ mod tests {
                     formula: None,
                     role_code: "rezkachi".to_string(),
                     item_code: String::new(),
+                    qty_formula: "cpp_kg".to_string(),
+                    from_location: "CPP ombor".to_string(),
+                    to_location: "Rezka apparat".to_string(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -976,6 +1074,9 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1013,6 +1114,9 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1026,6 +1130,9 @@ mod tests {
                     }),
                     role_code: String::new(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1036,6 +1143,9 @@ mod tests {
                     formula: None,
                     role_code: "rezkachi".to_string(),
                     item_code: String::new(),
+                    qty_formula: "order_qty / 6".to_string(),
+                    from_location: "CPP ombor".to_string(),
+                    to_location: "Rezka apparat".to_string(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1046,6 +1156,9 @@ mod tests {
                     formula: None,
                     role_code: "operator".to_string(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1056,6 +1169,9 @@ mod tests {
                     formula: None,
                     role_code: String::new(),
                     item_code: String::new(),
+                    qty_formula: String::new(),
+                    from_location: String::new(),
+                    to_location: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },

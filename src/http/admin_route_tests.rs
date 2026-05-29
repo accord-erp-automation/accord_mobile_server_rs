@@ -135,7 +135,10 @@ async fn admin_production_maps_save_compiles_program() {
                         "id":"task",
                         "kind":"task",
                         "title":"Rezkaga yuborish",
-                        "role_code":"rezkachi"
+                        "role_code":"rezkachi",
+                        "qty_formula":"cpp_kg",
+                        "from_location":"CPP ombor",
+                        "to_location":"Rezka apparat"
                     },
                     {"id":"end","kind":"end","title":"End"}
                 ],
@@ -192,7 +195,10 @@ async fn admin_production_map_run_returns_calculated_tasks() {
                         "id":"task",
                         "kind":"task",
                         "title":"Rezkaga yuborish",
-                        "role_code":"rezkachi"
+                        "role_code":"rezkachi",
+                        "qty_formula":"cpp_kg",
+                        "from_location":"CPP ombor",
+                        "to_location":"Rezka apparat"
                     },
                     {"id":"end","kind":"end","title":"End"}
                 ],
@@ -222,6 +228,9 @@ async fn admin_production_map_run_returns_calculated_tasks() {
     assert_eq!(value["variables"]["cpp_kg"], 108.0);
     assert_eq!(value["tasks"][0]["task_kind"], "create_task");
     assert_eq!(value["tasks"][0]["role_code"], "rezkachi");
+    assert_eq!(value["tasks"][0]["qty"], 108.0);
+    assert_eq!(value["tasks"][0]["from_location"], "CPP ombor");
+    assert_eq!(value["tasks"][0]["to_location"], "Rezka apparat");
 }
 
 #[tokio::test]
