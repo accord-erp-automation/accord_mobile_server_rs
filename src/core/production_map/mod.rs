@@ -122,6 +122,8 @@ pub struct ProductionMapRunResult {
     pub order_qty: f64,
     pub variables: BTreeMap<String, f64>,
     pub tasks: Vec<ProductionTaskDraft>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visited_node_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub awaiting_node_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -765,10 +767,12 @@ pub fn run_map_with_variables(
         return Err(ProductionMapError::MissingStart);
     };
     let mut visited = BTreeSet::new();
+    let mut visited_node_ids = Vec::new();
     while visited.insert(current_id.to_string()) {
         let node = node_by_id
             .get(current_id)
             .expect("compiled map only contains known node ids");
+        visited_node_ids.push(node.id.clone());
         if node.kind == ProductionMapNodeKind::End {
             break;
         }
@@ -793,6 +797,7 @@ pub fn run_map_with_variables(
                             order_qty,
                             variables,
                             tasks,
+                            visited_node_ids,
                             awaiting_node_id: node.id.clone(),
                             awaiting_variable: variable,
                             awaiting_expression: formula.expression.clone(),
@@ -848,6 +853,7 @@ pub fn run_map_with_variables(
         order_qty,
         variables,
         tasks,
+        visited_node_ids,
         awaiting_node_id: String::new(),
         awaiting_variable: String::new(),
         awaiting_expression: String::new(),
@@ -1031,6 +1037,7 @@ mod tests {
         assert_eq!(result.tasks[0].qty, 108.0);
         assert_eq!(result.tasks[0].from_location, "CPP ombor");
         assert_eq!(result.tasks[0].to_location, "Rezka apparat");
+        assert_eq!(result.visited_node_ids, ["start", "formula", "task", "end"]);
     }
 
     #[test]
@@ -1089,6 +1096,7 @@ mod tests {
         assert_eq!(result.awaiting_node_id, "large_order");
         assert_eq!(result.awaiting_variable, "pechat_ok");
         assert_eq!(result.awaiting_expression, "pechat_ok == 1");
+        assert_eq!(result.visited_node_ids, ["start", "large_order"]);
     }
 
     #[test]
