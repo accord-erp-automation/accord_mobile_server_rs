@@ -234,6 +234,34 @@ impl AdminReadPort for ErpnextClient {
             .collect())
     }
 
+    async fn warehouses(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::core::admin::models::AdminWarehouse>, AdminPortError> {
+        let mut params = vec![
+            ("fields", r#"["name","company","is_group"]"#.to_string()),
+            ("filters", r#"[["disabled","=",0]]"#.to_string()),
+            (
+                "limit_page_length",
+                normalize_limit(limit, 30, 500).to_string(),
+            ),
+            ("order_by", "name asc".to_string()),
+        ];
+        if !query.trim().is_empty() {
+            params.push(("or_filters", warehouse_or_filters(query)));
+        }
+        let payload: ListResponse<WarehouseRow> = self
+            .admin_get_json("/api/resource/Warehouse", &params)
+            .await?;
+        Ok(payload
+            .data
+            .into_iter()
+            .map(warehouse)
+            .filter(|item| !item.warehouse.is_empty())
+            .collect())
+    }
+
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
         let payload: ListResponse<ItemGroupRow> = self
             .admin_get_json(

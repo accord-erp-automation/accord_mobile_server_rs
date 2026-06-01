@@ -871,6 +871,26 @@ async fn admin_customers_and_items_read_like_go() {
 }
 
 #[tokio::test]
+async fn admin_warehouses_returns_real_erpnext_warehouse_names() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/warehouses?q=Stores&limit=5",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body[0]["warehouse"], "Stores - CH");
+    assert_eq!(body[0]["company"], "Company");
+}
+
+#[tokio::test]
 async fn admin_item_group_tree_returns_parent_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -1466,6 +1486,32 @@ impl AdminReadPort for FakeAdminReadPort {
             "All Item Groups".to_string(),
             "All Item Groups".to_string(),
         ])
+    }
+
+    async fn warehouses(
+        &self,
+        query: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::core::admin::models::AdminWarehouse>, AdminPortError> {
+        let warehouses = vec![
+            crate::core::admin::models::AdminWarehouse {
+                warehouse: "Stores - CH".to_string(),
+                company: "Company".to_string(),
+                is_group: false,
+            },
+            crate::core::admin::models::AdminWarehouse {
+                warehouse: "Finished Goods - CH".to_string(),
+                company: "Company".to_string(),
+                is_group: false,
+            },
+        ];
+        let query = query.trim().to_lowercase();
+        Ok(warehouses
+            .into_iter()
+            .filter(|warehouse| {
+                query.is_empty() || warehouse.warehouse.to_lowercase().contains(&query)
+            })
+            .collect())
     }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {

@@ -22,6 +22,34 @@ pub async fn items_bulk_move_group(
     }
 }
 
+pub async fn warehouses(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Query(query): Query<ItemQuery>,
+) -> Result<Response, AdminError> {
+    authorize_any_capability(
+        &state,
+        &headers,
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::CatalogItemRead,
+        ],
+    )
+    .await?;
+    if method != Method::GET {
+        return Err(method_not_allowed());
+    }
+    let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
+    state
+        .admin
+        .warehouses(query.q.as_deref().unwrap_or(""), limit)
+        .await
+        .map(json_response)
+        .map_err(|_| server_error("admin warehouses fetch failed"))
+}
+
 pub async fn werka_code_regenerate(
     State(state): State<AppState>,
     method: Method,

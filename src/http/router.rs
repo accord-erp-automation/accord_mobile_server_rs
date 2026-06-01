@@ -204,6 +204,7 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::customer_remove),
         )
         .route("/v1/mobile/admin/items", any(admin::items))
+        .route("/v1/mobile/admin/warehouses", any(admin::warehouses))
         .route(
             "/v1/mobile/admin/items/bulk-move-group",
             any(admin::items_bulk_move_group),

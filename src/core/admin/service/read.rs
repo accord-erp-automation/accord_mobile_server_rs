@@ -1,7 +1,7 @@
 use super::helpers::*;
 use super::*;
 
-use crate::core::admin::models::AdminItemGroup;
+use crate::core::admin::models::{AdminItemGroup, AdminWarehouse};
 
 impl AdminService {
     pub async fn suppliers_page(
@@ -188,6 +188,14 @@ impl AdminService {
         } else {
             Ok(dedupe_strings(groups))
         }
+    }
+
+    pub async fn warehouses(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
+        self.read_port()?.warehouses(query, limit).await
     }
 
     pub async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {

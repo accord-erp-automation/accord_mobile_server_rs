@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState};
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminState, AdminWarehouse};
 use crate::core::auth::ports::AuthConfigSink;
 use crate::core::werka::models::SupplierItem;
 
@@ -72,6 +72,29 @@ pub trait AdminReadPort: Send + Sync {
     ) -> Result<Vec<SupplierItem>, AdminPortError>;
 
     async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError>;
+
+    async fn warehouses(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
+        let items = self.items_page(query, limit, 0).await?;
+        let mut seen = std::collections::BTreeSet::new();
+        Ok(items
+            .into_iter()
+            .filter_map(|item| {
+                let warehouse = item.warehouse.trim();
+                if warehouse.is_empty() || !seen.insert(warehouse.to_lowercase()) {
+                    return None;
+                }
+                Some(AdminWarehouse {
+                    warehouse: warehouse.to_string(),
+                    company: String::new(),
+                    is_group: false,
+                })
+            })
+            .collect())
+    }
 
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
         let groups = self.item_groups("", 500).await?;

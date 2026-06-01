@@ -19,7 +19,7 @@ pub use suppliers::{
 };
 use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system::{
-    capabilities, items_bulk_move_group, role_assignments, roles, werka_code_regenerate,
+    capabilities, items_bulk_move_group, role_assignments, roles, warehouses, werka_code_regenerate,
 };
 
 use axum::Json;

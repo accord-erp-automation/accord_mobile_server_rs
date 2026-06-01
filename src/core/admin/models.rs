@@ -20,6 +20,13 @@ pub struct AdminSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminWarehouse {
+    pub warehouse: String,
+    pub company: String,
+    pub is_group: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminCreateSupplierRequest {
     pub name: String,
     pub phone: String,

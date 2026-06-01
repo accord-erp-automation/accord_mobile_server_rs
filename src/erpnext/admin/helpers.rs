@@ -59,6 +59,15 @@ pub(super) struct ItemGroupRow {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct WarehouseRow {
+    pub(super) name: String,
+    #[serde(default)]
+    pub(super) company: String,
+    #[serde(default)]
+    pub(super) is_group: i32,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ItemSupplierRow {
     pub(super) parent: String,
 }
@@ -166,6 +175,14 @@ pub(super) fn item_group(row: ItemGroupRow) -> AdminItemGroup {
     }
 }
 
+pub(super) fn warehouse(row: WarehouseRow) -> crate::core::admin::models::AdminWarehouse {
+    crate::core::admin::models::AdminWarehouse {
+        warehouse: row.name.trim().to_string(),
+        company: row.company.trim().to_string(),
+        is_group: row.is_group != 0,
+    }
+}
+
 pub(super) fn blank_default(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -221,6 +238,11 @@ pub(super) fn customer_or_filters(query: &str) -> String {
 pub(super) fn item_or_filters(query: &str) -> String {
     let like = like_pattern(query);
     serde_json::json!([["name", "like", like], ["item_name", "like", like],]).to_string()
+}
+
+pub(super) fn warehouse_or_filters(query: &str) -> String {
+    let like = like_pattern(query);
+    serde_json::json!([["name", "like", like], ["warehouse_name", "like", like],]).to_string()
 }
 
 pub(super) fn like_pattern(query: &str) -> String {
