@@ -43,6 +43,7 @@ pub struct ProductionMapNode {
 #[serde(rename_all = "snake_case")]
 pub enum ProductionMapNodeKind {
     Start,
+    Location,
     Material,
     Formula,
     Condition,
@@ -359,6 +360,7 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
                 }
                 validate_condition_expression(&formula.expression)?;
             }
+            ProductionMapNodeKind::Location => {}
             ProductionMapNodeKind::Material
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
@@ -807,6 +809,7 @@ pub fn run_map_with_variables(
                 };
                 variables.insert(node.id.clone(), if result { 1.0 } else { 0.0 });
             }
+            ProductionMapNodeKind::Location => {}
             ProductionMapNodeKind::Material
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
@@ -945,6 +948,7 @@ fn compile_node(
     }
     let op_code = match node.kind {
         ProductionMapNodeKind::Start => "start",
+        ProductionMapNodeKind::Location => "warehouse_location",
         ProductionMapNodeKind::Material => "require_material",
         ProductionMapNodeKind::Formula => {
             let Some(formula) = &node.formula else {
@@ -994,6 +998,43 @@ mod tests {
             Some("order_qty * 1.08")
         );
         assert_eq!(program.operations[2].op_code, "create_task");
+    }
+
+    #[test]
+    fn compile_map_accepts_location_markers_without_task_drafts() {
+        let mut map = sample_map();
+        map.nodes.insert(
+            1,
+            ProductionMapNode {
+                id: "cpp_warehouse".to_string(),
+                kind: ProductionMapNodeKind::Location,
+                title: "CPP ombor".to_string(),
+                formula: None,
+                role_code: String::new(),
+                item_code: String::new(),
+                qty_formula: String::new(),
+                from_location: String::new(),
+                to_location: String::new(),
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+        map.edges[0].to = "cpp_warehouse".to_string();
+        map.edges.insert(
+            1,
+            ProductionMapEdge {
+                from: "cpp_warehouse".to_string(),
+                to: "formula".to_string(),
+                branch: String::new(),
+            },
+        );
+
+        let program = compile_map(&map).expect("compile");
+        assert_eq!(program.operations[1].op_code, "warehouse_location");
+
+        let result = run_map(&map, 100.0).expect("run map");
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].node_id, "task");
     }
 
     #[test]
