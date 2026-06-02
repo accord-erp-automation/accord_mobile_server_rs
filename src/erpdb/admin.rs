@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{MySql, QueryBuilder, query_as};
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup};
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminWarehouse};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort};
 use crate::core::werka::models::SupplierItem;
 use crate::erpdb::reader::DirectDbReader;
@@ -184,6 +184,27 @@ impl AdminReadPort for DirectDbReader {
             .collect())
     }
 
+    async fn warehouses(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
+        let like = like_pattern(query);
+        let rows = query_as::<_, AdminWarehouseRow>(ADMIN_WAREHOUSES_SQL)
+            .bind(query.trim())
+            .bind(&like)
+            .bind(&like)
+            .bind(clamp_limit(limit, 30, 500) as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_lookup_error)?;
+        Ok(rows
+            .into_iter()
+            .map(AdminWarehouseRow::into_warehouse)
+            .filter(|warehouse| !warehouse.warehouse.is_empty())
+            .collect())
+    }
+
     async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
         let rows = query_as::<_, AdminItemGroupRow>(ADMIN_ITEM_GROUP_TREE_SQL)
             .fetch_all(&self.pool)
@@ -288,6 +309,23 @@ impl AdminItemGroupRow {
             name: self.name.trim().to_string(),
             item_group_name: blank_default(&self.item_group_name, &self.name),
             parent_item_group: self.parent_item_group.trim().to_string(),
+            is_group: self.is_group != 0,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AdminWarehouseRow {
+    name: String,
+    company: String,
+    is_group: i32,
+}
+
+impl AdminWarehouseRow {
+    fn into_warehouse(self) -> AdminWarehouse {
+        AdminWarehouse {
+            warehouse: self.name.trim().to_string(),
+            company: self.company.trim().to_string(),
             is_group: self.is_group != 0,
         }
     }
@@ -410,6 +448,18 @@ const ADMIN_ITEM_GROUP_TREE_SQL: &str = r#"
     ORDER BY lft ASC, name ASC
 "#;
 
+const ADMIN_WAREHOUSES_SQL: &str = r#"
+    SELECT
+        name,
+        COALESCE(company, '') AS company,
+        COALESCE(is_group, 0) AS is_group
+    FROM tabWarehouse
+    WHERE COALESCE(disabled, 0) = 0
+      AND (? = '' OR name LIKE ? ESCAPE '\\' OR company LIKE ? ESCAPE '\\')
+    ORDER BY is_group ASC, name ASC
+    LIMIT ?
+"#;
+
 const ADMIN_ASSIGNED_SUPPLIER_ITEMS_SQL: &str = r#"
     SELECT DISTINCT
         i.name AS item_code,
@@ -457,6 +507,20 @@ mod tests {
         assert_eq!(entry.ref_, "SUP-001");
         assert_eq!(entry.name, "Best Supplier");
         assert_eq!(entry.phone, "+99890");
+    }
+
+    #[test]
+    fn maps_admin_warehouse_row_from_erpnext_fields() {
+        let warehouse = AdminWarehouseRow {
+            name: " Stores - A ".to_string(),
+            company: " Accord ".to_string(),
+            is_group: 0,
+        }
+        .into_warehouse();
+
+        assert_eq!(warehouse.warehouse, "Stores - A");
+        assert_eq!(warehouse.company, "Accord");
+        assert!(!warehouse.is_group);
     }
 
     #[test]
