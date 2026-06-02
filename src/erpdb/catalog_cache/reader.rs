@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup};
+use crate::core::admin::models::{AdminDirectoryEntry, AdminItemGroup, AdminWarehouse};
 use crate::core::admin::ports::{AdminPortError, AdminReadPort};
 use crate::core::profile::ports::{
     CustomerProfileRecord, DownloadedFile, ProfileLookup, ProfilePortError, SupplierProfileRecord,
@@ -153,6 +153,14 @@ impl AdminReadPort for CatalogCacheReader {
             Ok(value) => Ok(value),
             Err(_) => self.fallback_admin()?.item_group_tree().await,
         }
+    }
+
+    async fn warehouses(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
+        self.fallback_admin()?.warehouses(query, limit).await
     }
 
     async fn assigned_supplier_items(
