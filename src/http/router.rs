@@ -6,8 +6,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::app::AppState;
 use crate::http::handlers::{
-    admin, auth, customer, gscale, notifications, profile, push, rps_batch, stock_entry, supplier,
-    werka,
+    admin, auth, customer, gscale, notifications, profile, push, rezka, rps_batch, stock_entry,
+    supplier, werka,
 };
 
 pub fn build_router(state: AppState) -> Router {
@@ -29,6 +29,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/rps/batch/state", any(rps_batch::state))
         .route("/v1/mobile/rps/batch/stop", any(rps_batch::stop))
         .route("/v1/mobile/rps/batch/print", any(rps_batch::print))
+        .route("/v1/mobile/rezka/source", any(rezka::source))
+        .route("/v1/mobile/rezka/split", any(rezka::split))
         .route("/v1/mobile/stock-entry/lookup", any(stock_entry::lookup))
         .route("/v1/mobile/customer/summary", any(customer::summary))
         .route("/v1/mobile/customer/history", any(customer::history))

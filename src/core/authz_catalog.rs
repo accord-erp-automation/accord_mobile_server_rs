@@ -182,4 +182,10 @@ pub(super) const CAPABILITY_CATALOG: &[CapabilityDefinition] = &[
         label: "RPS batch manage",
         default_roles: ADMIN_WERKA,
     },
+    CapabilityDefinition {
+        capability: Capability::RezkaSplitManage,
+        code: "rezka.split.manage",
+        label: "Rezka split manage",
+        default_roles: ADMIN_ONLY,
+    },
 ];

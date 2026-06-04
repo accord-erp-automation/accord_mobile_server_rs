@@ -21,11 +21,15 @@ pub async fn items(
         return Err(method_not_allowed());
     }
     let principal = authenticated_principal(&state, &headers).await?;
-    if !state
+    let can_read_gscale = state
         .admin
         .principal_has_capability(&principal, Capability::GscaleCatalogRead)
-        .await
-    {
+        .await;
+    let can_manage_rezka = state
+        .admin
+        .principal_has_capability(&principal, Capability::RezkaSplitManage)
+        .await;
+    if !can_read_gscale && !can_manage_rezka {
         return Err(forbidden());
     }
     let items = state

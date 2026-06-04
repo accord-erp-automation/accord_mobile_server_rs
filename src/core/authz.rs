@@ -41,6 +41,7 @@ pub enum Capability {
     GscaleCatalogRead,
     GscalePrint,
     RpsBatchManage,
+    RezkaSplitManage,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

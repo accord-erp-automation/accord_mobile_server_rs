@@ -12,6 +12,7 @@ use crate::core::profile::ports::ProfileStorePort;
 use crate::core::profile::service::ProfileService;
 use crate::core::push::ports::PushTokenStorePort;
 use crate::core::push::service::PushService;
+use crate::core::rezka::RezkaService;
 use crate::core::rps_batch::{RpsBatchLmdbStore, RpsBatchService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::service::WerkaService;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub production_maps: ProductionMapService,
     pub push: PushService,
     pub gscale: GscaleService,
+    pub rezka: RezkaService,
     pub rps_batch: RpsBatchService,
     pub werka: WerkaService,
     pub sessions: SessionManager,
@@ -65,10 +67,14 @@ impl AppState {
         let push = PushService::new(push_token_store.clone())
             .with_sender(discover_push_sender(push_token_store));
         let rps_batch = RpsBatchService::new(Arc::new(build_rps_batch_store()));
-        let mut gscale = GscaleService::new().with_driver(Arc::new(RpsDriverClient::new(
+        let scale_driver = Arc::new(RpsDriverClient::new(
             config.erp_timeout,
             std::env::var("RP_SCALE_DRIVER_URL").unwrap_or_default(),
-        )));
+        ));
+        let mut gscale = GscaleService::new().with_driver(scale_driver.clone());
+        let mut rezka = RezkaService::new()
+            .with_driver(scale_driver)
+            .with_epc_source(Arc::new(crate::core::gscale::epc::GscaleEpcGenerator::new()));
         let mut werka = WerkaService::new();
         let sessions = match local_store_backend("MOBILE_API_SESSION_STORE_BACKEND") {
             LocalStoreBackend::Lmdb => {
@@ -137,6 +143,7 @@ impl AppState {
             customer = customer.with_delivery_port(client.clone());
             profiles = profiles.with_erp_lookup(client.clone());
             gscale = gscale.with_erp(client.clone());
+            rezka = rezka.with_erp(client.clone());
             werka = werka
                 .with_customer_issue_writer(client.clone())
                 .with_unannounced_writer(client.clone())
@@ -230,6 +237,7 @@ impl AppState {
             production_maps,
             push,
             gscale,
+            rezka,
             rps_batch,
             werka,
             sessions,

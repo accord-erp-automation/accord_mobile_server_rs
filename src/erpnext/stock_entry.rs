@@ -5,6 +5,10 @@ use serde_json::Value;
 
 use crate::core::gscale::models::{CreateMaterialReceiptDraftInput, MaterialReceiptDraft};
 use crate::core::gscale::ports::{GscalePortError, MaterialReceiptErpPort};
+use crate::core::rezka::models::{
+    CreateRezkaRepackDraftInput, RezkaOutputLabel, RezkaRepackDraft, RezkaSourceEntry,
+};
+use crate::core::rezka::ports::{RezkaErpPort, RezkaPortError};
 use crate::erpnext::client::ErpnextClient;
 
 #[async_trait]
@@ -76,6 +80,70 @@ impl MaterialReceiptErpPort for ErpnextClient {
         let path = stock_entry_path(name)?;
         self.stock_entry_empty_request(Method::DELETE, &path, None)
             .await
+    }
+}
+
+#[async_trait]
+impl RezkaErpPort for ErpnextClient {
+    async fn create_rezka_repack_draft(
+        &self,
+        input: CreateRezkaRepackDraftInput,
+    ) -> Result<RezkaRepackDraft, RezkaPortError> {
+        validate_rezka_repack_input(&input)?;
+        let company = if input.source.company.trim().is_empty() {
+            self.stock_entry_warehouse_company(&input.source.warehouse)
+                .await
+                .map_err(rezka_port_error)?
+        } else {
+            input.source.company.trim().to_string()
+        };
+        let mut items = Vec::with_capacity(input.outputs.len() + 1);
+        items.push(build_rezka_source_item(&input.source));
+        for output in &input.outputs {
+            let uom = if output.uom.trim().is_empty() {
+                blank_default(
+                    &self
+                        .stock_entry_item_uom(&output.item_code)
+                        .await
+                        .map_err(rezka_port_error)?,
+                    "Kg",
+                )
+            } else {
+                output.uom.trim().to_string()
+            };
+            items.push(build_rezka_output_item(output, &uom));
+        }
+        let payload = serde_json::json!({
+            "stock_entry_type": "Repack",
+            "purpose": "Repack",
+            "company": company,
+            "from_warehouse": input.source.warehouse.trim(),
+            "remarks": build_rezka_remarks(&input),
+            "items": items,
+        });
+        let created: ResourceResponse<NameRow> = self
+            .stock_entry_json_request(Method::POST, "/api/resource/Stock Entry", Some(payload))
+            .await
+            .map_err(rezka_port_error)?;
+        let name = created.data.name.trim().to_string();
+        if name.is_empty() {
+            return Err(RezkaPortError::ErpWrite(
+                "erp repack stock entry name bo'sh".to_string(),
+            ));
+        }
+        Ok(RezkaRepackDraft { name })
+    }
+
+    async fn submit_rezka_repack_draft(&self, name: &str) -> Result<(), RezkaPortError> {
+        <Self as MaterialReceiptErpPort>::submit_stock_entry_draft(self, name)
+            .await
+            .map_err(rezka_port_error)
+    }
+
+    async fn delete_rezka_repack_draft(&self, name: &str) -> Result<(), RezkaPortError> {
+        <Self as MaterialReceiptErpPort>::delete_stock_entry_draft(self, name)
+            .await
+            .map_err(rezka_port_error)
     }
 }
 
@@ -238,6 +306,85 @@ fn build_material_receipt_item(input: &CreateMaterialReceiptDraftInput, uom: &st
         "valuation_rate": 1.0,
         "barcode": input.barcode.trim().to_ascii_uppercase(),
     })
+}
+
+fn validate_rezka_repack_input(input: &CreateRezkaRepackDraftInput) -> Result<(), RezkaPortError> {
+    if input.source.barcode.trim().is_empty()
+        || input.source.item_code.trim().is_empty()
+        || input.source.warehouse.trim().is_empty()
+        || input.source.qty <= 0.0
+        || input.outputs.len() < 2
+    {
+        return Err(RezkaPortError::InvalidInput(
+            "source_and_outputs_required".to_string(),
+        ));
+    }
+    for output in &input.outputs {
+        if output.epc.trim().is_empty()
+            || output.item_code.trim().is_empty()
+            || output.warehouse.trim().is_empty()
+            || output.qty <= 0.0
+        {
+            return Err(RezkaPortError::InvalidInput(
+                "output_item_warehouse_qty_epc_required".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn build_rezka_source_item(source: &RezkaSourceEntry) -> Value {
+    let uom = blank_default(&source.uom, "Kg");
+    serde_json::json!({
+        "item_code": source.item_code.trim(),
+        "s_warehouse": source.warehouse.trim(),
+        "qty": source.qty,
+        "uom": uom,
+        "stock_uom": uom,
+        "conversion_factor": 1,
+        "barcode": source.barcode.trim().to_ascii_uppercase(),
+    })
+}
+
+fn build_rezka_output_item(output: &RezkaOutputLabel, uom: &str) -> Value {
+    serde_json::json!({
+        "item_code": output.item_code.trim(),
+        "t_warehouse": output.warehouse.trim(),
+        "qty": output.qty,
+        "uom": uom,
+        "stock_uom": uom,
+        "conversion_factor": 1,
+        "is_finished_item": 1,
+        "set_basic_rate_manually": 1,
+        "basic_rate": 1.0,
+        "valuation_rate": 1.0,
+        "barcode": output.epc.trim().to_ascii_uppercase(),
+    })
+}
+
+fn build_rezka_remarks(input: &CreateRezkaRepackDraftInput) -> String {
+    let mut parts = vec![
+        "Accord mobile Rezka split".to_string(),
+        format!("source_barcode={}", input.source.barcode.trim()),
+        format!(
+            "source_stock_entry={}",
+            input.source.stock_entry_name.trim()
+        ),
+    ];
+    let reason = input.reason.trim();
+    if !reason.is_empty() {
+        parts.push(format!("reason={reason}"));
+    }
+    parts.join(" | ")
+}
+
+fn rezka_port_error(error: GscalePortError) -> RezkaPortError {
+    match error {
+        GscalePortError::InvalidInput(value) => RezkaPortError::InvalidInput(value),
+        GscalePortError::ErpWrite(value)
+        | GscalePortError::Driver(value)
+        | GscalePortError::NotConfigured(value) => RezkaPortError::ErpWrite(value),
+    }
 }
 
 #[cfg(test)]

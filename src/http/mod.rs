@@ -19,6 +19,8 @@ mod push_notify_tests;
 #[cfg(test)]
 mod push_route_tests;
 #[cfg(test)]
+mod rezka_route_tests;
+#[cfg(test)]
 mod router_tests;
 #[cfg(test)]
 mod stock_entry_route_tests;

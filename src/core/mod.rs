@@ -6,6 +6,7 @@ pub mod gscale;
 pub mod production_map;
 pub mod profile;
 pub mod push;
+pub mod rezka;
 pub mod rps_batch;
 pub mod session;
 pub mod werka;
