@@ -41,6 +41,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                         qty: 400.0,
                         uom: "m".to_string(),
                         target_warehouse: "Work In Progress - A".to_string(),
+                        reason: "400 metr zakazga".to_string(),
                     },
                     RezkaSplitOutputRequest {
                         item_code: "FLEXO-200".to_string(),
@@ -48,6 +49,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                         qty: 200.0,
                         uom: "m".to_string(),
                         target_warehouse: "Stores - A".to_string(),
+                        reason: "qoldiq qaytdi".to_string(),
                     },
                 ],
             },
@@ -60,10 +62,12 @@ async fn split_creates_repack_prints_each_output_and_submits() {
     assert_eq!(response.outputs.len(), 2);
     assert_eq!(response.outputs[0].epc, "EPC-400");
     assert_eq!(response.outputs[1].epc, "EPC-200");
+    assert_eq!(response.outputs[0].reason, "400 metr zakazga");
+    assert_eq!(response.outputs[1].reason, "qoldiq qaytdi");
     assert_eq!(
         events.lock().unwrap().as_slice(),
         [
-            "draft:SRC-600:2:Zakaz uchun",
+            "draft:SRC-600:2:Zakaz uchun:400 metr zakazga,qoldiq qaytdi",
             "print:EPC-400:FLEXO-400:400.000:m",
             "print:EPC-200:FLEXO-200:200.000:m",
             "submit:MAT-STE-REPACK-1"
@@ -135,10 +139,16 @@ impl RezkaErpPort for FakeRezkaErp {
         input: CreateRezkaRepackDraftInput,
     ) -> Result<RezkaRepackDraft, RezkaPortError> {
         self.events.lock().unwrap().push(format!(
-            "draft:{}:{}:{}",
+            "draft:{}:{}:{}:{}",
             input.source.barcode,
             input.outputs.len(),
-            input.reason
+            input.reason,
+            input
+                .outputs
+                .iter()
+                .map(|output| output.reason.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
         Ok(RezkaRepackDraft {
             name: "MAT-STE-REPACK-1".to_string(),

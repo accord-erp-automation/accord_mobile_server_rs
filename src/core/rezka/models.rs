@@ -45,6 +45,8 @@ pub struct RezkaSplitOutputRequest {
     pub uom: String,
     #[serde(default)]
     pub target_warehouse: String,
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -55,6 +57,7 @@ pub struct RezkaOutputLabel {
     pub qty: f64,
     pub uom: String,
     pub warehouse: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]

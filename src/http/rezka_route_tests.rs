@@ -76,14 +76,16 @@ async fn rezka_split_creates_repack_and_prints_output_qrs() {
                         "item_name":"Flexo 400",
                         "qty":400,
                         "uom":"m",
-                        "target_warehouse":"Work In Progress - A"
+                        "target_warehouse":"Work In Progress - A",
+                        "reason":"400 metr zakazga"
                     },
                     {
                         "item_code":"FLEXO-200",
                         "item_name":"Flexo 200",
                         "qty":200,
                         "uom":"m",
-                        "target_warehouse":"Stores - A"
+                        "target_warehouse":"Stores - A",
+                        "reason":"qoldiq qaytdi"
                     }
                 ]
             }"#,
@@ -96,10 +98,12 @@ async fn rezka_split_creates_repack_and_prints_output_qrs() {
     assert_eq!(body["stock_entry_name"], "MAT-STE-REPACK-1");
     assert_eq!(body["outputs"][0]["epc"], "EPC-400");
     assert_eq!(body["outputs"][1]["epc"], "EPC-200");
+    assert_eq!(body["outputs"][0]["reason"], "400 metr zakazga");
+    assert_eq!(body["outputs"][1]["reason"], "qoldiq qaytdi");
     assert_eq!(
         events.lock().unwrap().as_slice(),
         [
-            "draft:SRC-600:2:Zakaz uchun kesildi",
+            "draft:SRC-600:2:Zakaz uchun kesildi:400 metr zakazga,qoldiq qaytdi",
             "print:EPC-400:FLEXO-400:400.000:m",
             "print:EPC-200:FLEXO-200:200.000:m",
             "submit:MAT-STE-REPACK-1"
@@ -242,10 +246,16 @@ impl RezkaErpPort for FakeRezkaErp {
         input: CreateRezkaRepackDraftInput,
     ) -> Result<RezkaRepackDraft, RezkaPortError> {
         self.events.lock().unwrap().push(format!(
-            "draft:{}:{}:{}",
+            "draft:{}:{}:{}:{}",
             input.source.barcode,
             input.outputs.len(),
-            input.reason
+            input.reason,
+            input
+                .outputs
+                .iter()
+                .map(|output| output.reason.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
         Ok(RezkaRepackDraft {
             name: "MAT-STE-REPACK-1".to_string(),

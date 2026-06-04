@@ -166,6 +166,7 @@ impl NormalizedRezkaSplit {
                 qty: output.qty,
                 uom: blank_default(&output.uom, &source.uom),
                 warehouse: target_warehouse,
+                reason: output.reason.trim().to_string(),
             });
         }
         if (total - source.qty).abs() > QTY_TOLERANCE {

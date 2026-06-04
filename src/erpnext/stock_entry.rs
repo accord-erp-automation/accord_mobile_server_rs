@@ -375,6 +375,18 @@ fn build_rezka_remarks(input: &CreateRezkaRepackDraftInput) -> String {
     if !reason.is_empty() {
         parts.push(format!("reason={reason}"));
     }
+    for output in &input.outputs {
+        let output_reason = output.reason.trim();
+        if output_reason.is_empty() {
+            continue;
+        }
+        parts.push(format!(
+            "output_reason[{}:{}]={}",
+            output.item_code.trim(),
+            output.epc.trim(),
+            output_reason
+        ));
+    }
     parts.join(" | ")
 }
 
