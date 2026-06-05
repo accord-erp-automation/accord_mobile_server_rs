@@ -50,6 +50,16 @@ impl RezkaService {
             RezkaServiceError::NotConfigured("scale driver is not configured".into())
         })?;
         let job = NormalizedRezkaSplit::from_request(source, request, self.epc.as_deref())?;
+        tracing::info!(
+            source_barcode = %job.source.barcode,
+            source_item_code = %job.source.item_code,
+            source_qty = job.source.qty,
+            output_count = job.outputs.len(),
+            printable_count = job.printable_outputs.len(),
+            outputs = ?rezka_output_log(&job.outputs),
+            printable_outputs = ?rezka_output_log(&job.printable_outputs),
+            "rezka split normalized"
+        );
         let draft = erp
             .create_rezka_repack_draft(CreateRezkaRepackDraftInput {
                 source: job.source.clone(),
@@ -60,16 +70,56 @@ impl RezkaService {
             .map_err(|error| RezkaServiceError::ErpWrite(error.message()))?;
 
         for output in &job.printable_outputs {
+            tracing::info!(
+                stock_entry_name = %draft.name,
+                epc = %output.epc,
+                item_code = %output.item_code,
+                item_name = %output.item_name,
+                qty = output.qty,
+                uom = %output.uom,
+                warehouse = %output.warehouse,
+                reason = %output.reason,
+                print_qr = output.print_qr,
+                "rezka split sending print request"
+            );
             let print = driver
                 .print_material_receipt(job.driver_request(output))
                 .await;
             match print {
-                Ok(print) if print_done(&print) => {}
+                Ok(print) if print_done(&print) => {
+                    tracing::info!(
+                        stock_entry_name = %draft.name,
+                        epc = %output.epc,
+                        item_code = %output.item_code,
+                        qty = output.qty,
+                        printer = %print.printer,
+                        mode = %print.mode,
+                        status = %print.status,
+                        "rezka split print done"
+                    );
+                }
                 Ok(print) => {
+                    tracing::warn!(
+                        stock_entry_name = %draft.name,
+                        epc = %output.epc,
+                        item_code = %output.item_code,
+                        qty = output.qty,
+                        status = %print.status,
+                        detail = %print_error_detail(&print),
+                        "rezka split print failed"
+                    );
                     let _ = erp.delete_rezka_repack_draft(&draft.name).await;
                     return Err(RezkaServiceError::PrintFailed(print_error_detail(&print)));
                 }
                 Err(error) => {
+                    tracing::warn!(
+                        stock_entry_name = %draft.name,
+                        epc = %output.epc,
+                        item_code = %output.item_code,
+                        qty = output.qty,
+                        error = %error.message(),
+                        "rezka split print request error"
+                    );
                     let _ = erp.delete_rezka_repack_draft(&draft.name).await;
                     return Err(RezkaServiceError::PrintFailed(error.message()));
                 }
@@ -148,22 +198,24 @@ impl NormalizedRezkaSplit {
         let mut outputs = Vec::with_capacity(request.outputs.len());
         let mut printable_outputs = Vec::new();
         for output in request.outputs {
-            let item_code = if output.print_qr {
+            let target_warehouse = output.target_warehouse.trim().to_string();
+            let print_qr =
+                output.print_qr && !is_rezka_scrap_output(&target_warehouse, &output.reason);
+            let item_code = if print_qr {
                 output.item_code.trim().to_string()
             } else {
                 blank_default(&output.item_code, &source.item_code)
             };
-            let target_warehouse = output.target_warehouse.trim().to_string();
             if item_code.is_empty()
                 || target_warehouse.is_empty()
                 || output.qty <= 0.0
-                || (output.print_qr && output.item_code.trim().is_empty())
+                || (print_qr && output.item_code.trim().is_empty())
             {
                 return Err(RezkaServiceError::InvalidInput(
                     "output_item_warehouse_qty_required".to_string(),
                 ));
             }
-            let next_epc = if output.print_qr {
+            let next_epc = if print_qr {
                 let epc = epc.ok_or_else(|| RezkaServiceError::EpcGenerationFailed)?;
                 let next_epc = epc.next_epc().trim().to_ascii_uppercase();
                 if next_epc.is_empty() {
@@ -175,7 +227,7 @@ impl NormalizedRezkaSplit {
             };
             let output_label = RezkaOutputLabel {
                 epc: next_epc,
-                item_name: if output.print_qr {
+                item_name: if print_qr {
                     blank_default(&output.item_name, &item_code)
                 } else {
                     blank_default(&output.item_name, &source.item_name)
@@ -185,7 +237,7 @@ impl NormalizedRezkaSplit {
                 uom: blank_default(&output.uom, &source.uom),
                 warehouse: target_warehouse,
                 reason: output.reason.trim().to_string(),
-                print_qr: output.print_qr,
+                print_qr,
             };
             if output_label.print_qr {
                 printable_outputs.push(output_label.clone());
@@ -269,6 +321,31 @@ fn print_error_detail(print: &ScaleDriverPrintResponse) -> String {
         }
     }
     "print failed".to_string()
+}
+
+fn is_rezka_scrap_output(warehouse: &str, reason: &str) -> bool {
+    let warehouse = warehouse.trim().to_ascii_lowercase();
+    let reason = reason.trim().to_ascii_lowercase();
+    warehouse == "brak - ombori - a" || reason.contains("brak") || reason.contains("atxot")
+}
+
+fn rezka_output_log(outputs: &[RezkaOutputLabel]) -> Vec<String> {
+    outputs
+        .iter()
+        .map(|output| {
+            format!(
+                "item_code={} item_name={} qty={:.3} uom={} warehouse={} reason={} print_qr={} epc={}",
+                output.item_code,
+                output.item_name,
+                output.qty,
+                output.uom,
+                output.warehouse,
+                output.reason,
+                output.print_qr,
+                output.epc
+            )
+        })
+        .collect()
 }
 
 fn clean_erp_error(message: &str) -> String {

@@ -137,6 +137,66 @@ async fn split_keeps_scrap_in_repack_without_printing_qr() {
 }
 
 #[tokio::test]
+async fn split_does_not_print_brak_warehouse_even_when_client_requests_qr() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = RezkaService::new()
+        .with_erp(Arc::new(FakeRezkaErp {
+            events: events.clone(),
+        }))
+        .with_driver(Arc::new(FakeDriver {
+            events: events.clone(),
+        }))
+        .with_epc_source(Arc::new(SeqEpc::new(["EPC-550"])));
+
+    let response = service
+        .split(
+            source(),
+            RezkaSplitRequest {
+                source_barcode: "SRC-600".to_string(),
+                source_stock_entry: "MAT-STE-001".to_string(),
+                source_line_index: 1,
+                reason: "Zakaz uchun".to_string(),
+                driver_url: "http://127.0.0.1:39117".to_string(),
+                printer: "godex".to_string(),
+                print_mode: "label".to_string(),
+                outputs: vec![
+                    RezkaSplitOutputRequest {
+                        item_code: "FLEXO-550".to_string(),
+                        item_name: "Flexo 550".to_string(),
+                        qty: 550.0,
+                        uom: "m".to_string(),
+                        target_warehouse: "Work In Progress - A".to_string(),
+                        reason: "550 metr zakazga".to_string(),
+                        print_qr: true,
+                    },
+                    RezkaSplitOutputRequest {
+                        item_code: "FLEXO-RAW".to_string(),
+                        item_name: "Flexo raw".to_string(),
+                        qty: 50.0,
+                        uom: "m".to_string(),
+                        target_warehouse: "brak - ombori - A".to_string(),
+                        reason: "Atxot / brak mahsulot".to_string(),
+                        print_qr: true,
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("split");
+
+    assert_eq!(response.outputs.len(), 1);
+    assert_eq!(response.outputs[0].epc, "EPC-550");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "draft:SRC-600:2:Zakaz uchun:550 metr zakazga,Atxot / brak mahsulot",
+            "print:EPC-550:FLEXO-550:550.000:m",
+            "submit:MAT-STE-REPACK-1"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn split_rejects_output_total_that_does_not_match_source_qty() {
     let service = RezkaService::new()
         .with_erp(Arc::new(FakeRezkaErp {
