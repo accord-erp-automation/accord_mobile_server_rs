@@ -89,6 +89,9 @@ async fn decode_print_response(
 }
 
 fn print_error_detail(parsed: ScaleDriverPrintResponse, status: reqwest::StatusCode) -> String {
+    if parsed.error.trim() == "driver_busy" {
+        return "Printer band. Boshqa mobile print qilmoqda, keyin qayta urining.".to_string();
+    }
     for value in [parsed.detail, parsed.error, parsed.status] {
         let value = value.trim().to_string();
         if !value.is_empty() {
@@ -165,5 +168,20 @@ mod tests {
             client.print_url("file:///tmp/rps").unwrap_err(),
             GscalePortError::InvalidInput(_)
         ));
+    }
+
+    #[test]
+    fn print_error_detail_maps_driver_busy_to_operator_message() {
+        let parsed = ScaleDriverPrintResponse {
+            error: "driver_busy".to_string(),
+            detail: "Printer server band. Boshqa mobile print yakunlagandan keyin qayta urining."
+                .to_string(),
+            ..ScaleDriverPrintResponse::default()
+        };
+
+        assert_eq!(
+            print_error_detail(parsed, reqwest::StatusCode::CONFLICT),
+            "Printer band. Boshqa mobile print qilmoqda, keyin qayta urining."
+        );
     }
 }
