@@ -42,6 +42,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                         uom: "m".to_string(),
                         target_warehouse: "Work In Progress - A".to_string(),
                         reason: "400 metr zakazga".to_string(),
+                        print_qr: true,
                     },
                     RezkaSplitOutputRequest {
                         item_code: "FLEXO-200".to_string(),
@@ -50,6 +51,7 @@ async fn split_creates_repack_prints_each_output_and_submits() {
                         uom: "m".to_string(),
                         target_warehouse: "Stores - A".to_string(),
                         reason: "qoldiq qaytdi".to_string(),
+                        print_qr: true,
                     },
                 ],
             },
@@ -70,6 +72,65 @@ async fn split_creates_repack_prints_each_output_and_submits() {
             "draft:SRC-600:2:Zakaz uchun:400 metr zakazga,qoldiq qaytdi",
             "print:EPC-400:FLEXO-400:400.000:m",
             "print:EPC-200:FLEXO-200:200.000:m",
+            "submit:MAT-STE-REPACK-1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn split_keeps_scrap_in_repack_without_printing_qr() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = RezkaService::new()
+        .with_erp(Arc::new(FakeRezkaErp {
+            events: events.clone(),
+        }))
+        .with_driver(Arc::new(FakeDriver {
+            events: events.clone(),
+        }))
+        .with_epc_source(Arc::new(SeqEpc::new(["EPC-550"])));
+
+    let response = service
+        .split(
+            source(),
+            RezkaSplitRequest {
+                source_barcode: "SRC-600".to_string(),
+                source_stock_entry: "MAT-STE-001".to_string(),
+                source_line_index: 1,
+                reason: "Zakaz uchun".to_string(),
+                driver_url: "http://127.0.0.1:39117".to_string(),
+                printer: "godex".to_string(),
+                print_mode: "label".to_string(),
+                outputs: vec![
+                    RezkaSplitOutputRequest {
+                        item_code: "FLEXO-550".to_string(),
+                        item_name: "Flexo 550".to_string(),
+                        qty: 550.0,
+                        uom: "m".to_string(),
+                        target_warehouse: "Work In Progress - A".to_string(),
+                        reason: "550 metr zakazga".to_string(),
+                        print_qr: true,
+                    },
+                    RezkaSplitOutputRequest {
+                        qty: 50.0,
+                        uom: "m".to_string(),
+                        target_warehouse: "brak - ombori - A".to_string(),
+                        reason: "Atxot".to_string(),
+                        print_qr: false,
+                        ..RezkaSplitOutputRequest::default()
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("split");
+
+    assert_eq!(response.outputs.len(), 1);
+    assert_eq!(response.outputs[0].epc, "EPC-550");
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "draft:SRC-600:2:Zakaz uchun:550 metr zakazga,Atxot",
+            "print:EPC-550:FLEXO-550:550.000:m",
             "submit:MAT-STE-REPACK-1"
         ]
     );

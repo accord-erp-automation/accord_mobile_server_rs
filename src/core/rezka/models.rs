@@ -33,6 +33,10 @@ pub struct RezkaSplitRequest {
     pub outputs: Vec<RezkaSplitOutputRequest>,
 }
 
+fn default_print_qr() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RezkaSplitOutputRequest {
     #[serde(default)]
@@ -47,6 +51,8 @@ pub struct RezkaSplitOutputRequest {
     pub target_warehouse: String,
     #[serde(default)]
     pub reason: String,
+    #[serde(default = "default_print_qr")]
+    pub print_qr: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -58,6 +64,7 @@ pub struct RezkaOutputLabel {
     pub uom: String,
     pub warehouse: String,
     pub reason: String,
+    pub print_qr: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]

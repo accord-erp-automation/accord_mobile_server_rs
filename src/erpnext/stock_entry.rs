@@ -320,10 +320,10 @@ fn validate_rezka_repack_input(input: &CreateRezkaRepackDraftInput) -> Result<()
         ));
     }
     for output in &input.outputs {
-        if output.epc.trim().is_empty()
-            || output.item_code.trim().is_empty()
+        if output.item_code.trim().is_empty()
             || output.warehouse.trim().is_empty()
             || output.qty <= 0.0
+            || (output.print_qr && output.epc.trim().is_empty())
         {
             return Err(RezkaPortError::InvalidInput(
                 "output_item_warehouse_qty_epc_required".to_string(),
@@ -347,7 +347,7 @@ fn build_rezka_source_item(source: &RezkaSourceEntry) -> Value {
 }
 
 fn build_rezka_output_item(output: &RezkaOutputLabel, uom: &str) -> Value {
-    serde_json::json!({
+    let mut item = serde_json::json!({
         "item_code": output.item_code.trim(),
         "t_warehouse": output.warehouse.trim(),
         "qty": output.qty,
@@ -358,8 +358,11 @@ fn build_rezka_output_item(output: &RezkaOutputLabel, uom: &str) -> Value {
         "set_basic_rate_manually": 1,
         "basic_rate": 1.0,
         "valuation_rate": 1.0,
-        "barcode": output.epc.trim().to_ascii_uppercase(),
-    })
+    });
+    if output.print_qr {
+        item["barcode"] = Value::String(output.epc.trim().to_ascii_uppercase());
+    }
+    item
 }
 
 fn build_rezka_remarks(input: &CreateRezkaRepackDraftInput) -> String {

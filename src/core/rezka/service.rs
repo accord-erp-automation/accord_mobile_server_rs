@@ -59,7 +59,7 @@ impl RezkaService {
             .await
             .map_err(|error| RezkaServiceError::ErpWrite(error.message()))?;
 
-        for output in &job.outputs {
+        for output in &job.printable_outputs {
             let print = driver
                 .print_material_receipt(job.driver_request(output))
                 .await;
@@ -85,7 +85,7 @@ impl RezkaService {
             status: "printed".to_string(),
             stock_entry_name: draft.name,
             source_barcode: job.source.barcode,
-            outputs: job.outputs,
+            outputs: job.printable_outputs,
         })
     }
 }
@@ -98,6 +98,7 @@ struct NormalizedRezkaSplit {
     printer: String,
     print_mode: String,
     outputs: Vec<RezkaOutputLabel>,
+    printable_outputs: Vec<RezkaOutputLabel>,
 }
 
 impl NormalizedRezkaSplit {
@@ -143,31 +144,54 @@ impl NormalizedRezkaSplit {
             ));
         }
 
-        let epc = epc.ok_or_else(|| RezkaServiceError::EpcGenerationFailed)?;
         let mut total = 0.0;
         let mut outputs = Vec::with_capacity(request.outputs.len());
+        let mut printable_outputs = Vec::new();
         for output in request.outputs {
-            let item_code = output.item_code.trim().to_string();
+            let item_code = if output.print_qr {
+                output.item_code.trim().to_string()
+            } else {
+                blank_default(&output.item_code, &source.item_code)
+            };
             let target_warehouse = output.target_warehouse.trim().to_string();
-            if item_code.is_empty() || target_warehouse.is_empty() || output.qty <= 0.0 {
+            if item_code.is_empty()
+                || target_warehouse.is_empty()
+                || output.qty <= 0.0
+                || (output.print_qr && output.item_code.trim().is_empty())
+            {
                 return Err(RezkaServiceError::InvalidInput(
                     "output_item_warehouse_qty_required".to_string(),
                 ));
             }
-            let next_epc = epc.next_epc().trim().to_ascii_uppercase();
-            if next_epc.is_empty() {
-                return Err(RezkaServiceError::EpcGenerationFailed);
-            }
-            total += output.qty;
-            outputs.push(RezkaOutputLabel {
+            let next_epc = if output.print_qr {
+                let epc = epc.ok_or_else(|| RezkaServiceError::EpcGenerationFailed)?;
+                let next_epc = epc.next_epc().trim().to_ascii_uppercase();
+                if next_epc.is_empty() {
+                    return Err(RezkaServiceError::EpcGenerationFailed);
+                }
+                next_epc
+            } else {
+                String::new()
+            };
+            let output_label = RezkaOutputLabel {
                 epc: next_epc,
-                item_name: blank_default(&output.item_name, &item_code),
+                item_name: if output.print_qr {
+                    blank_default(&output.item_name, &item_code)
+                } else {
+                    blank_default(&output.item_name, &source.item_name)
+                },
                 item_code,
                 qty: output.qty,
                 uom: blank_default(&output.uom, &source.uom),
                 warehouse: target_warehouse,
                 reason: output.reason.trim().to_string(),
-            });
+                print_qr: output.print_qr,
+            };
+            if output_label.print_qr {
+                printable_outputs.push(output_label.clone());
+            }
+            total += output.qty;
+            outputs.push(output_label);
         }
         if (total - source.qty).abs() > QTY_TOLERANCE {
             return Err(RezkaServiceError::InvalidInput(format!(
@@ -183,6 +207,7 @@ impl NormalizedRezkaSplit {
             printer: blank_default(&request.printer.to_ascii_lowercase(), "zebra"),
             print_mode: blank_default(&request.print_mode.to_ascii_lowercase(), "rfid"),
             outputs,
+            printable_outputs,
         })
     }
 
