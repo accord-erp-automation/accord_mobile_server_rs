@@ -2,6 +2,9 @@ pub mod admin;
 pub mod auth;
 pub mod authz;
 pub mod customer;
+pub mod formula;
+#[cfg(test)]
+mod formula_tests;
 pub mod gscale;
 pub mod production_map;
 pub mod profile;

@@ -5,6 +5,8 @@ pub mod router;
 #[cfg(test)]
 mod admin_route_tests;
 #[cfg(test)]
+mod calculate_route_tests;
+#[cfg(test)]
 mod customer_route_tests;
 #[cfg(test)]
 mod gscale_route_tests;

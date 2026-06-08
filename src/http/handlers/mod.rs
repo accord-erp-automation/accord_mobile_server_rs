@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod calculate;
 pub mod customer;
 pub mod gscale;
 pub mod notifications;
