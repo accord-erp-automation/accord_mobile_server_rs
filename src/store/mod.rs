@@ -1,6 +1,7 @@
 pub mod admin_state_store;
 #[cfg(test)]
 mod admin_state_store_tests;
+pub mod calculate_order_store;
 pub mod json_file;
 pub mod production_map_store;
 pub mod profile_store;

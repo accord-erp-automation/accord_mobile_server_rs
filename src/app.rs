@@ -5,6 +5,7 @@ use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::service::AdminService;
 use crate::core::auth::service::AuthService;
+use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
 use crate::core::gscale::GscaleService;
 use crate::core::production_map::ProductionMapService;
@@ -24,6 +25,7 @@ use crate::erpnext::client::ErpnextClient;
 use crate::fcm::discover_push_sender;
 use crate::rps::RpsDriverClient;
 use crate::store::admin_state_store::AdminSupplierStateBackend;
+use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::store::production_map_store::ProductionMapStore;
 use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
 use crate::store::push_token_store::{LmdbPushTokenStore, PushTokenStore};
@@ -43,6 +45,7 @@ pub struct AppState {
     pub customer: CustomerService,
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
+    pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub push: PushService,
     pub gscale: GscaleService,
     pub rezka: RezkaService,
@@ -62,6 +65,7 @@ impl AppState {
         let profile_store = build_profile_store(&config);
         let production_maps =
             ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
+        let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
         let push_token_store = build_push_token_store(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
@@ -235,6 +239,7 @@ impl AppState {
             customer,
             profiles,
             production_maps,
+            calculate_orders,
             push,
             gscale,
             rezka,

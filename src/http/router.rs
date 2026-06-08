@@ -18,6 +18,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/auth/logout", any(auth::logout))
         .route("/v1/mobile/me", any(auth::me))
         .route("/v1/mobile/calculate", any(calculate::calculate_route))
+        .route(
+            "/v1/mobile/calculate/orders",
+            any(calculate::calculate_orders_route),
+        )
+        .route(
+            "/v1/mobile/calculate/orders/delete",
+            any(calculate::calculate_order_delete_route),
+        )
         .route("/v1/mobile/profile", any(profile::profile))
         .route("/v1/mobile/profile/avatar", any(profile::avatar_upload))
         .route("/v1/mobile/push/token", any(push::token))

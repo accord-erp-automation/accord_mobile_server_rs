@@ -56,6 +56,95 @@ async fn calculate_endpoint_rejects_supplier() {
     assert_eq!(body["error"], "forbidden");
 }
 
+#[tokio::test]
+async fn calculate_orders_round_trip_on_server_without_kg() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let create = build_router(state.clone())
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/calculate/orders",
+            &token,
+            r#"{
+                "name":"CPP 600",
+                "order_number":"ORD-1",
+                "customer":"Mijoz",
+                "product":"cpp / 20 mikron / 600",
+                "status":"Ready",
+                "material_display":"pet 12 / pe oq 30",
+                "color":"oq",
+                "kg":999,
+                "width_mm":530,
+                "waste_percent":3,
+                "roll_count":7,
+                "first_layer_material":"pet",
+                "first_layer_micron":"12",
+                "second_layer_material":"pe oq",
+                "second_layer_micron":"30",
+                "note":"test"
+            }"#,
+        ))
+        .await
+        .expect("create response");
+    let create_body = json_body(create).await;
+    assert_eq!(create_body["ok"], true);
+    assert_eq!(create_body["template"]["name"], "CPP 600");
+    assert!(create_body["template"].get("kg").is_none());
+
+    let list = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/calculate/orders", &token, ""))
+        .await
+        .expect("list response");
+    let list_body = json_body(list).await;
+    assert_eq!(list_body["ok"], true);
+    assert_eq!(
+        list_body["templates"].as_array().expect("templates").len(),
+        1
+    );
+    assert_eq!(list_body["templates"][0]["waste_percent"], 3.0);
+    assert!(list_body["templates"][0].get("kg").is_none());
+
+    let id = list_body["templates"][0]["id"].as_str().expect("id");
+    let delete_body = format!(r#"{{"id":"{id}"}}"#);
+    let delete = build_router(state.clone())
+        .oneshot(request(
+            "POST",
+            "/v1/mobile/calculate/orders/delete",
+            &token,
+            &delete_body,
+        ))
+        .await
+        .expect("delete response");
+    assert_eq!(json_body(delete).await["ok"], true);
+
+    let empty = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/calculate/orders", &token, ""))
+        .await
+        .expect("empty response");
+    assert_eq!(
+        json_body(empty).await["templates"]
+            .as_array()
+            .expect("templates")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn calculate_orders_reject_supplier() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Supplier).await;
+
+    let response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/calculate/orders", &token, ""))
+        .await
+        .expect("response");
+    let body = json_body(response).await;
+
+    assert_eq!(body["error"], "forbidden");
+}
+
 fn test_state() -> AppState {
     let mut state = AppState::new(AppConfig {
         bind_addr: "127.0.0.1:8081".parse().expect("addr"),

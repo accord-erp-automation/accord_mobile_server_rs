@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod calculate_orders;
 pub mod customer;
 pub mod formula;
 #[cfg(test)]

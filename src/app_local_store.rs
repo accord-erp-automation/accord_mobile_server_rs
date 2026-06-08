@@ -97,6 +97,21 @@ pub(super) fn product_map_store_path() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("data/mobile_production_maps.json"))
 }
 
+pub(super) fn calculate_order_store_path() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_CALCULATE_ORDER_STORE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            #[cfg(test)]
+            {
+                test_json_path("mobile_calculate_orders")
+            }
+            #[cfg(not(test))]
+            {
+                std::path::PathBuf::from("data/mobile_calculate_orders.json")
+            }
+        })
+}
+
 pub(super) fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
     match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
         LocalStoreBackend::Lmdb => {
@@ -265,6 +280,17 @@ pub(super) fn test_lmdb_path(
         .unwrap_or("local-store");
     std::env::temp_dir().join(format!(
         "accord-mobile-server-rs-lmdb-test-{}-{count}-{stem}.lmdb",
+        std::process::id()
+    ))
+}
+
+#[cfg(test)]
+pub(super) fn test_json_path(stem: &str) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "accord-mobile-server-rs-json-test-{}-{count}-{stem}.json",
         std::process::id()
     ))
 }
