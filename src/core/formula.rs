@@ -21,6 +21,8 @@ pub struct CalculateRequest {
     #[serde(default)]
     pub width_mm: Option<f64>,
     #[serde(default)]
+    pub waste_percent: Option<f64>,
+    #[serde(default)]
     pub roll_count: Option<f64>,
     #[serde(default)]
     pub first_layer: LayerInput,
@@ -65,6 +67,7 @@ pub struct CalculateResponse {
     pub color: Option<String>,
     pub kg: f64,
     pub width_mm: f64,
+    pub waste_percent: f64,
     pub roll_count: Option<f64>,
     pub layers: Vec<LayerInput>,
     pub results: Vec<CalcResult>,
@@ -92,6 +95,10 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
     if width_mm <= 0.0 {
         return Err("RAZMER noto'g'ri".to_string());
     }
+    let waste_percent = request.waste_percent.unwrap_or(5.0);
+    if waste_percent < 0.0 {
+        return Err("Atxod foiz noto'g'ri".to_string());
+    }
     let results = calculate_variants(&request)?;
     let layers = visible_layers(&request);
 
@@ -106,6 +113,7 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
         color: clean_option(request.color),
         kg,
         width_mm,
+        waste_percent,
         roll_count: request.roll_count,
         layers,
         results,
@@ -190,8 +198,12 @@ fn calculate_single(request: &CalculateRequest) -> Result<CalcResult, String> {
     }
 
     let width_sm = width_mm / 10.0;
+    let waste_percent = request.waste_percent.unwrap_or(5.0);
+    if waste_percent < 0.0 {
+        return Err("Atxod foiz noto'g'ri".to_string());
+    }
     let base_length = kg / (coeff_sum * width_sm) * 6000.0;
-    let waste_length = base_length * 0.05;
+    let waste_length = base_length * waste_percent / 100.0;
     let rounded_length = round_up(base_length + waste_length, 500.0);
 
     Ok(CalcResult {

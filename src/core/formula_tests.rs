@@ -18,6 +18,23 @@ fn calculates_formula_with_waste_and_rounding() {
 }
 
 #[test]
+fn calculates_with_custom_waste_percent() {
+    let result = calculate(CalculateRequest {
+        kg: Some(300.0),
+        width_mm: Some(530.0),
+        waste_percent: Some(10.0),
+        first_layer: LayerInput::new("pet", "12"),
+        second_layer: LayerInput::new("pe oq", "30"),
+        ..CalculateRequest::default()
+    })
+    .expect("calculate");
+
+    assert_eq!(result.waste_percent, 10.0);
+    assert_eq!(result.results[0].rounded_length, 12500.0);
+    assert!((result.results[0].waste_length - 1132.0754).abs() < 0.001);
+}
+
+#[test]
 fn calculates_alternative_material_variants() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),
