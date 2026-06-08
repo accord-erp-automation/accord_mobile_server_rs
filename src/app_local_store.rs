@@ -103,11 +103,11 @@ pub(super) fn calculate_order_store_path() -> std::path::PathBuf {
         .unwrap_or_else(|_| {
             #[cfg(test)]
             {
-                test_json_path("mobile_calculate_orders")
+                test_sqlite_path("mobile_calculate_orders")
             }
             #[cfg(not(test))]
             {
-                std::path::PathBuf::from("data/mobile_calculate_orders.json")
+                std::path::PathBuf::from("data/mobile_calculate_orders.sqlite")
             }
         })
 }
@@ -285,12 +285,12 @@ pub(super) fn test_lmdb_path(
 }
 
 #[cfg(test)]
-pub(super) fn test_json_path(stem: &str) -> std::path::PathBuf {
+pub(super) fn test_sqlite_path(stem: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "accord-mobile-server-rs-json-test-{}-{count}-{stem}.json",
+        "accord-mobile-server-rs-sqlite-test-{}-{count}-{stem}.sqlite",
         std::process::id()
     ))
 }

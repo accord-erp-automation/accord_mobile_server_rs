@@ -1,6 +1,3 @@
-use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -109,69 +106,6 @@ pub fn validate_template(template: &CalculateOrderTemplate) -> Result<(), Calcul
 
 pub fn owner_key(role: &str, ref_: &str) -> String {
     format!("{}:{}", role.trim(), ref_.trim())
-}
-
-pub(crate) fn upsert_template(
-    store: &mut BTreeMap<String, Vec<CalculateOrderTemplate>>,
-    owner_key: &str,
-    mut template: CalculateOrderTemplate,
-) -> Result<CalculateOrderTemplate, CalculateOrderError> {
-    validate_template(&template)?;
-    let list = store.entry(owner_key.to_string()).or_default();
-    let normalized_name = normalize_name(&template.name);
-    let index = list
-        .iter()
-        .position(|item| normalize_name(&item.name) == normalized_name);
-    if let Some(index) = index {
-        if template.id.trim().is_empty() {
-            template.id = list[index].id.clone();
-        }
-        list[index] = stamp(template);
-        list.sort_by(|left, right| right.saved_at.cmp(&left.saved_at));
-        Ok(list[index].clone())
-    } else {
-        if template.id.trim().is_empty() {
-            template.id = new_id();
-        }
-        let saved = stamp(template);
-        list.push(saved.clone());
-        list.sort_by(|left, right| right.saved_at.cmp(&left.saved_at));
-        Ok(saved)
-    }
-}
-
-fn stamp(mut template: CalculateOrderTemplate) -> CalculateOrderTemplate {
-    template.name = template.name.trim().to_string();
-    template.order_number = template.order_number.trim().to_string();
-    template.customer = template.customer.trim().to_string();
-    template.product = template.product.trim().to_string();
-    template.status = template.status.trim().to_string();
-    template.material_display = template.material_display.trim().to_string();
-    template.color = template.color.trim().to_string();
-    template.first_layer_material = template.first_layer_material.trim().to_string();
-    template.first_layer_micron = template.first_layer_micron.trim().to_string();
-    template.second_layer_material = template.second_layer_material.trim().to_string();
-    template.second_layer_micron = template.second_layer_micron.trim().to_string();
-    template.third_layer_material = template.third_layer_material.trim().to_string();
-    template.third_layer_micron = template.third_layer_micron.trim().to_string();
-    template.note = template.note.trim().to_string();
-    template.saved_at = unix_micros().to_string();
-    template
-}
-
-fn normalize_name(value: &str) -> String {
-    value.trim().to_lowercase()
-}
-
-fn new_id() -> String {
-    unix_micros().to_string()
-}
-
-fn unix_micros() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_micros())
-        .unwrap_or_default()
 }
 
 fn default_waste_percent() -> f64 {
