@@ -22,6 +22,8 @@ pub struct MaterialReceiptPrintRequest {
     pub tare_enabled: bool,
     #[serde(default)]
     pub tare_kg: f64,
+    #[serde(default)]
+    pub print_count: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -40,6 +42,7 @@ pub struct MaterialReceiptPrintResponse {
     pub printer: String,
     pub print_mode: String,
     pub printer_status: String,
+    pub print_count: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -73,6 +76,7 @@ pub struct ScaleDriverPrintRequest {
     pub unit: String,
     pub tare_enabled: bool,
     pub tare_kg: f64,
+    pub print_count: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]

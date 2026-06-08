@@ -113,6 +113,7 @@ struct RpsPrintRequest {
     unit: String,
     tare_enabled: bool,
     tare_kg: f64,
+    print_count: u32,
 }
 
 impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
@@ -128,6 +129,7 @@ impl From<ScaleDriverPrintRequest> for RpsPrintRequest {
             unit: request.unit,
             tare_enabled: request.tare_enabled,
             tare_kg: request.tare_kg,
+            print_count: request.print_count,
         }
     }
 }

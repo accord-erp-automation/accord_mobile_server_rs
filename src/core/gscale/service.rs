@@ -116,6 +116,7 @@ impl GscaleService {
             printer: print.printer,
             print_mode: print.mode,
             printer_status: print.printer_status,
+            print_count: job.print_count,
         })
     }
     fn next_epc(&self) -> Result<String, GscaleServiceError> {
@@ -191,6 +192,7 @@ struct NormalizedMaterialReceiptJob {
     unit: String,
     tare_enabled: bool,
     tare_kg: f64,
+    print_count: u32,
 }
 
 impl NormalizedMaterialReceiptJob {
@@ -237,6 +239,7 @@ impl NormalizedMaterialReceiptJob {
             unit: blank_default(&request.unit, "kg"),
             tare_enabled: tare_kg > 0.0,
             tare_kg,
+            print_count: normalize_print_count(request.print_count),
         })
     }
 
@@ -253,8 +256,13 @@ impl NormalizedMaterialReceiptJob {
             unit: self.unit.clone(),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
+            print_count: self.print_count,
         }
     }
+}
+
+fn normalize_print_count(value: u32) -> u32 {
+    if value == 0 { 1 } else { value }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

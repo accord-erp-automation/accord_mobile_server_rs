@@ -276,6 +276,7 @@ impl NormalizedRezkaSplit {
             unit: output.uom.clone(),
             tare_enabled: false,
             tare_kg: 0.0,
+            print_count: 1,
         }
     }
 }

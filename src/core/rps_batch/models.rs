@@ -86,6 +86,8 @@ pub struct RpsBatchPrintRequest {
     pub unit: String,
     #[serde(default)]
     pub driver_url: String,
+    #[serde(default)]
+    pub print_count: u32,
 }
 
 impl RpsBatchSession {
@@ -104,6 +106,7 @@ impl RpsBatchSession {
             unit: first_non_empty(&request.unit, "kg"),
             tare_enabled: self.tare_enabled,
             tare_kg: self.tare_kg,
+            print_count: request.print_count,
         }
     }
 }

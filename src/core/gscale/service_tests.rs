@@ -21,6 +21,7 @@ fn request() -> MaterialReceiptPrintRequest {
         unit: String::new(),
         tare_enabled: true,
         tare_kg: 0.78,
+        print_count: 1,
     }
 }
 
@@ -104,6 +105,34 @@ async fn driver_first_starts_draft_before_slow_driver_finishes_and_submits_after
     assert!(
         print_done_pos < submit_pos,
         "ERP submit must wait for printer success: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn forwards_print_count_to_driver_without_creating_extra_erp_drafts() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let service = GscaleService::new()
+        .with_erp(Arc::new(FakeErp::new(events.clone())))
+        .with_driver(Arc::new(FakeDriver::done(events.clone())))
+        .with_epc_source(Arc::new(QueueEpc::new(["EPC-DUP"])));
+    let mut request = request();
+    request.print_count = 5;
+
+    let response = service
+        .print_material_receipt_driver_first(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, "printed");
+    assert_eq!(response.print_count, 5);
+    wait_for_event(&events, "submit:MAT-STE-001").await;
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "print:EPC-DUP:5",
+            "create:EPC-DUP:1.720",
+            "submit:MAT-STE-001"
+        ]
     );
 }
 
@@ -220,7 +249,7 @@ impl ScaleDriverPort for FakeDriver {
         self.events
             .lock()
             .unwrap()
-            .push(format!("print:{}", request.epc));
+            .push(format!("print:{}:{}", request.epc, request.print_count));
         Ok(ScaleDriverPrintResponse {
             ok: self.ok,
             status: self.status.to_string(),
