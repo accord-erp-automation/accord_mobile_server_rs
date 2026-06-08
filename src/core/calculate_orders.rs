@@ -13,7 +13,11 @@ pub struct CalculateOrderTemplate {
     #[serde(default)]
     pub order_number: String,
     #[serde(default)]
+    pub customer_ref: String,
+    #[serde(default)]
     pub customer: String,
+    #[serde(default)]
+    pub item_code: String,
     #[serde(default)]
     pub product: String,
     #[serde(default)]

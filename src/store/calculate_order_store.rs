@@ -146,7 +146,9 @@ fn stamp_template(
         .unwrap_or_else(new_id);
     template.name = template.name.trim().to_string();
     template.order_number = template.order_number.trim().to_string();
+    template.customer_ref = template.customer_ref.trim().to_string();
     template.customer = template.customer.trim().to_string();
+    template.item_code = template.item_code.trim().to_string();
     template.product = template.product.trim().to_string();
     template.status = template.status.trim().to_string();
     template.material_display = template.material_display.trim().to_string();
@@ -222,7 +224,9 @@ mod tests {
                     name: "CPP 600".to_string(),
                     saved_at: String::new(),
                     order_number: "ORD-1".to_string(),
+                    customer_ref: "CUST-001".to_string(),
                     customer: "Mijoz".to_string(),
+                    item_code: "ITEM-001".to_string(),
                     product: "cpp / 20 mikron / 600".to_string(),
                     status: String::new(),
                     material_display: String::new(),

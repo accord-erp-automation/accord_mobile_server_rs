@@ -55,6 +55,7 @@ pub async fn customer_list(
     state
         .admin
         .customers_page(
+            query.q.as_deref().unwrap_or_default(),
             optional_search_limit(query.limit.as_deref(), 20, 50),
             optional_offset(query.offset.as_deref()),
         )

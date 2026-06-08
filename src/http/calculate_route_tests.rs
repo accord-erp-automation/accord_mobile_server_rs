@@ -69,7 +69,9 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
             r#"{
                 "name":"CPP 600",
                 "order_number":"ORD-1",
+                "customer_ref":"CUST-001",
                 "customer":"Mijoz",
+                "item_code":"ITEM-001",
                 "product":"cpp / 20 mikron / 600",
                 "status":"Ready",
                 "material_display":"pet 12 / pe oq 30",
@@ -109,6 +111,8 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
     );
     assert_eq!(list_body["templates"][0]["waste_percent"], 3.0);
     assert_eq!(list_body["templates"][0]["image_id"], "img-test");
+    assert_eq!(list_body["templates"][0]["customer_ref"], "CUST-001");
+    assert_eq!(list_body["templates"][0]["item_code"], "ITEM-001");
     assert!(list_body["templates"][0].get("kg").is_none());
 
     let id = list_body["templates"][0]["id"].as_str().expect("id");

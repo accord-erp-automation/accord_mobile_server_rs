@@ -196,6 +196,7 @@ pub struct OkResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct PageQuery {
+    pub q: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
 }

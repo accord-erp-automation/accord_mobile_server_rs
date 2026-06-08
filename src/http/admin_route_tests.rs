@@ -871,6 +871,31 @@ async fn admin_customers_and_items_read_like_go() {
 }
 
 #[tokio::test]
+async fn admin_customer_list_passes_query_to_read_port() {
+    let mut state = test_state();
+    let seen_query = Arc::new(Mutex::new(String::new()));
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(Arc::new(QueryCaptureReadPort {
+            seen_query: seen_query.clone(),
+        }))
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/customers/list?q=ali&limit=5&offset=2",
+            &token,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await[0]["ref"], "CUST-QUERY");
+    assert_eq!(&*seen_query.lock().await, "ali");
+}
+
+#[tokio::test]
 async fn admin_warehouses_returns_real_erpnext_warehouse_names() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -1428,6 +1453,81 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
 }
 
 struct FakeAdminReadPort;
+
+struct QueryCaptureReadPort {
+    seen_query: Arc<Mutex<String>>,
+}
+
+#[async_trait]
+impl AdminReadPort for QueryCaptureReadPort {
+    async fn suppliers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.suppliers_page(query, limit, offset).await
+    }
+
+    async fn supplier_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.supplier_by_ref(ref_).await
+    }
+
+    async fn customers_page(
+        &self,
+        query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        *self.seen_query.lock().await = query.to_string();
+        Ok(vec![entry("CUST-QUERY", "Customer Query", "+998904444444")])
+    }
+
+    async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.customer_by_ref(ref_).await
+    }
+
+    async fn items_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_page(query, limit, offset).await
+    }
+
+    async fn items_by_codes(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_by_codes(item_codes).await
+    }
+
+    async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
+        FakeAdminReadPort.item_groups(query, limit).await
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        supplier_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .assigned_supplier_items(supplier_ref, limit)
+            .await
+    }
+
+    async fn customer_items(
+        &self,
+        customer_ref: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .customer_items(customer_ref, query, limit)
+            .await
+    }
+}
 
 #[async_trait]
 impl AdminReadPort for FakeAdminReadPort {

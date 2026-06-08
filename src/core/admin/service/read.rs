@@ -127,12 +127,13 @@ impl AdminService {
 
     pub async fn customers_page(
         &self,
+        query: &str,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<CustomerDirectoryEntry>, AdminPortError> {
         let read = self.read_port()?;
         let states = self.states().await?;
-        let entries = read.customers_page("", limit, offset).await?;
+        let entries = read.customers_page(query, limit, offset).await?;
         Ok(entries
             .into_iter()
             .filter(|entry| {
