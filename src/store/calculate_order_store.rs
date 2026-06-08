@@ -151,6 +151,10 @@ fn stamp_template(
     template.status = template.status.trim().to_string();
     template.material_display = template.material_display.trim().to_string();
     template.color = template.color.trim().to_string();
+    template.image_id = template.image_id.trim().to_string();
+    template.image_name = template.image_name.trim().to_string();
+    template.image_mime = template.image_mime.trim().to_string();
+    template.image_url = template.image_url.trim().to_string();
     template.first_layer_material = template.first_layer_material.trim().to_string();
     template.first_layer_micron = template.first_layer_micron.trim().to_string();
     template.second_layer_material = template.second_layer_material.trim().to_string();
@@ -223,6 +227,11 @@ mod tests {
                     status: String::new(),
                     material_display: String::new(),
                     color: String::new(),
+                    image_id: "img-1".to_string(),
+                    image_name: "rang.jpg".to_string(),
+                    image_mime: "image/jpeg".to_string(),
+                    image_size_bytes: 3,
+                    image_url: "/v1/mobile/calculate/orders/image/view?id=img-1".to_string(),
                     width_mm: 530.0,
                     waste_percent: 3.0,
                     roll_count: Some(7.0),

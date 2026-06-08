@@ -23,6 +23,16 @@ pub struct CalculateOrderTemplate {
     #[serde(default)]
     pub color: String,
     #[serde(default)]
+    pub image_id: String,
+    #[serde(default)]
+    pub image_name: String,
+    #[serde(default)]
+    pub image_mime: String,
+    #[serde(default)]
+    pub image_size_bytes: u64,
+    #[serde(default)]
+    pub image_url: String,
+    #[serde(default)]
     pub width_mm: f64,
     #[serde(default = "default_waste_percent")]
     pub waste_percent: f64,

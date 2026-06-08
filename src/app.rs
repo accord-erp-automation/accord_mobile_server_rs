@@ -46,6 +46,7 @@ pub struct AppState {
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
     pub rezka: RezkaService,
@@ -66,6 +67,7 @@ impl AppState {
         let production_maps =
             ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
+        let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
         let push = PushService::new(push_token_store.clone())
@@ -240,6 +242,7 @@ impl AppState {
             profiles,
             production_maps,
             calculate_orders,
+            calculate_order_image_dir,
             push,
             gscale,
             rezka,

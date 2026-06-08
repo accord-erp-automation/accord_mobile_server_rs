@@ -102,6 +102,8 @@ async fn go_mobile_route_inventory_is_registered() {
         "/v1/mobile/profile",
         "/v1/mobile/profile/avatar",
         "/v1/mobile/profile/avatar/view",
+        "/v1/mobile/calculate/orders/image",
+        "/v1/mobile/calculate/orders/image/view",
         "/v1/mobile/push/token",
         "/v1/mobile/gscale/items",
         "/v1/mobile/gscale/material-receipt/print",

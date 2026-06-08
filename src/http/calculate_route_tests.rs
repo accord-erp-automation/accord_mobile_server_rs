@@ -74,6 +74,11 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
                 "status":"Ready",
                 "material_display":"pet 12 / pe oq 30",
                 "color":"oq",
+                "image_id":"img-test",
+                "image_name":"rang.jpg",
+                "image_mime":"image/jpeg",
+                "image_size_bytes":3,
+                "image_url":"/v1/mobile/calculate/orders/image/view?id=img-test",
                 "kg":999,
                 "width_mm":530,
                 "waste_percent":3,
@@ -103,6 +108,7 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
         1
     );
     assert_eq!(list_body["templates"][0]["waste_percent"], 3.0);
+    assert_eq!(list_body["templates"][0]["image_id"], "img-test");
     assert!(list_body["templates"][0].get("kg").is_none());
 
     let id = list_body["templates"][0]["id"].as_str().expect("id");
@@ -129,6 +135,56 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
             .len(),
         0
     );
+}
+
+#[tokio::test]
+async fn calculate_order_image_upload_and_view_are_owner_scoped() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let upload = build_router(state.clone())
+        .oneshot(image_request(
+            "POST",
+            "/v1/mobile/calculate/orders/image",
+            &token,
+            b"fake-jpeg".to_vec(),
+        ))
+        .await
+        .expect("upload response");
+    let upload_status = upload.status();
+    let upload_body = json_body(upload).await;
+
+    assert_eq!(upload_status, StatusCode::OK, "{upload_body}");
+    assert_eq!(upload_body["ok"], true);
+    assert_eq!(upload_body["image"]["image_mime"], "image/jpeg");
+    assert_eq!(upload_body["image"]["image_size_bytes"], 9);
+    let image_url = upload_body["image"]["image_url"].as_str().expect("url");
+
+    let view = build_router(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(image_url)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("view request"),
+        )
+        .await
+        .expect("view response");
+    let status = view.status();
+    let content_type = view
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = to_bytes(view.into_body(), usize::MAX)
+        .await
+        .expect("view body");
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "image/jpeg");
+    assert_eq!(&bytes[..], b"fake-jpeg");
 }
 
 #[tokio::test]
@@ -204,6 +260,18 @@ fn request(method: &str, uri: &str, token: &str, body: &str) -> Request<Body> {
     builder
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
+        .expect("request")
+}
+
+fn image_request(method: &str, uri: &str, token: &str, body: Vec<u8>) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if !token.trim().is_empty() {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    builder
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header("x-file-name", "rang.jpg")
+        .body(Body::from(body))
         .expect("request")
 }
 

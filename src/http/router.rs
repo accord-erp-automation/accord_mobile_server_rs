@@ -26,6 +26,14 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/mobile/calculate/orders/delete",
             any(calculate::calculate_order_delete_route),
         )
+        .route(
+            "/v1/mobile/calculate/orders/image",
+            any(calculate::calculate_order_image_upload_route),
+        )
+        .route(
+            "/v1/mobile/calculate/orders/image/view",
+            any(calculate::calculate_order_image_view_route),
+        )
         .route("/v1/mobile/profile", any(profile::profile))
         .route("/v1/mobile/profile/avatar", any(profile::avatar_upload))
         .route("/v1/mobile/push/token", any(push::token))

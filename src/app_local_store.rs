@@ -112,6 +112,22 @@ pub(super) fn calculate_order_store_path() -> std::path::PathBuf {
         })
 }
 
+pub(super) fn calculate_order_image_dir() -> std::path::PathBuf {
+    std::env::var("MOBILE_API_CALCULATE_ORDER_IMAGE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            #[cfg(test)]
+            {
+                let path = test_sqlite_path("mobile_calculate_order_images");
+                path.with_extension("images")
+            }
+            #[cfg(not(test))]
+            {
+                std::path::PathBuf::from("data/mobile_calculate_order_images")
+            }
+        })
+}
+
 pub(super) fn build_push_token_store(config: &AppConfig) -> Arc<dyn PushTokenStorePort> {
     match local_store_backend("MOBILE_API_PUSH_TOKEN_STORE_BACKEND") {
         LocalStoreBackend::Lmdb => {
