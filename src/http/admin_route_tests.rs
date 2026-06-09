@@ -1466,6 +1466,29 @@ async fn admin_create_customer_rejects_duplicate_phone() {
 }
 
 #[tokio::test]
+async fn admin_create_customer_rejects_local_format_duplicate_phone() {
+    let mut state = test_state();
+    state.admin = AdminService::new(&state.config)
+        .with_read_port(Arc::new(LocalPhoneDuplicateReadPort))
+        .with_write_port(Arc::new(FakeAdminReadPort))
+        .with_state_port(Arc::new(FakeAdminStatePort::new()));
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/customers",
+            &token,
+            r#"{"name":"Duplicate Customer","phone":"110000011"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"], "phone already exists");
+}
+
+#[tokio::test]
 async fn admin_supplier_status_and_remove_mutations_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -1651,6 +1674,8 @@ struct QueryCaptureReadPort {
     seen_query: Arc<Mutex<String>>,
 }
 
+struct LocalPhoneDuplicateReadPort;
+
 #[async_trait]
 impl AdminReadPort for QueryCaptureReadPort {
     async fn suppliers_page(
@@ -1674,6 +1699,80 @@ impl AdminReadPort for QueryCaptureReadPort {
     ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
         *self.seen_query.lock().await = query.to_string();
         Ok(vec![entry("CUST-QUERY", "Customer Query", "+998904444444")])
+    }
+
+    async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.customer_by_ref(ref_).await
+    }
+
+    async fn items_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_page(query, limit, offset).await
+    }
+
+    async fn items_by_codes(
+        &self,
+        item_codes: &[String],
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort.items_by_codes(item_codes).await
+    }
+
+    async fn item_groups(&self, query: &str, limit: usize) -> Result<Vec<String>, AdminPortError> {
+        FakeAdminReadPort.item_groups(query, limit).await
+    }
+
+    async fn assigned_supplier_items(
+        &self,
+        supplier_ref: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .assigned_supplier_items(supplier_ref, limit)
+            .await
+    }
+
+    async fn customer_items(
+        &self,
+        customer_ref: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SupplierItem>, AdminPortError> {
+        FakeAdminReadPort
+            .customer_items(customer_ref, query, limit)
+            .await
+    }
+}
+
+#[async_trait]
+impl AdminReadPort for LocalPhoneDuplicateReadPort {
+    async fn suppliers_page(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        FakeAdminReadPort.suppliers_page(query, limit, offset).await
+    }
+
+    async fn supplier_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {
+        FakeAdminReadPort.supplier_by_ref(ref_).await
+    }
+
+    async fn customers_page(
+        &self,
+        query: &str,
+        _limit: usize,
+        _offset: usize,
+    ) -> Result<Vec<AdminDirectoryEntry>, AdminPortError> {
+        if query == "110000011" {
+            Ok(vec![entry("CUST-LOCAL", "Customer Local", "110000011")])
+        } else {
+            Ok(vec![])
+        }
     }
 
     async fn customer_by_ref(&self, ref_: &str) -> Result<AdminDirectoryEntry, AdminPortError> {

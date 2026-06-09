@@ -45,9 +45,36 @@ pub(super) fn normalize_admin_phone(phone: &str) -> Result<String, AdminPortErro
 }
 
 pub(super) fn phone_matches(stored: &str, normalized: &str) -> bool {
-    normalize_admin_phone(stored)
+    if normalize_admin_phone(stored)
         .map(|phone| phone.eq_ignore_ascii_case(normalized))
-        .unwrap_or_else(|_| stored.trim().eq_ignore_ascii_case(normalized))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let stored_digits = stored.trim().trim_start_matches('+');
+    let normalized_digits = normalized.trim().trim_start_matches('+');
+    if stored_digits.eq_ignore_ascii_case(normalized_digits) {
+        return true;
+    }
+
+    normalized_digits
+        .strip_prefix("998")
+        .map(|local| stored_digits.eq_ignore_ascii_case(local))
+        .unwrap_or(false)
+}
+
+pub(super) fn phone_search_terms(raw: &str, normalized: &str) -> Vec<String> {
+    let normalized_digits = normalized.trim().trim_start_matches('+');
+    let local = normalized_digits
+        .strip_prefix("998")
+        .unwrap_or(normalized_digits);
+    dedupe_strings(vec![
+        normalized.to_string(),
+        raw.trim().to_string(),
+        normalized_digits.to_string(),
+        local.to_string(),
+    ])
 }
 
 pub(super) fn bump_code_regen_state(

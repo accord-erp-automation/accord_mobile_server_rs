@@ -27,14 +27,16 @@ impl AdminService {
         phone: &str,
     ) -> Result<CustomerDirectoryEntry, AdminPortError> {
         let normalized = normalize_admin_phone(phone)?;
-        let existing = self.read_port()?.customers_page(&normalized, 50, 0).await?;
-        if existing
-            .iter()
-            .any(|entry| phone_matches(&entry.phone, &normalized))
-        {
-            return Err(AdminPortError::InvalidInput(
-                "phone already exists".to_string(),
-            ));
+        for query in phone_search_terms(phone, &normalized) {
+            let existing = self.read_port()?.customers_page(&query, 50, 0).await?;
+            if existing
+                .iter()
+                .any(|entry| phone_matches(&entry.phone, &normalized))
+            {
+                return Err(AdminPortError::InvalidInput(
+                    "phone already exists".to_string(),
+                ));
+            }
         }
         self.write_port()?
             .create_customer(name.trim(), &normalized)
