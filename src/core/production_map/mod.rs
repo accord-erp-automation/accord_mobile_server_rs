@@ -10,6 +10,8 @@ pub struct ProductionMapDefinition {
     pub id: String,
     pub product_code: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub order_number: String,
     #[serde(default)]
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]
@@ -1164,6 +1166,7 @@ mod tests {
             id: "hotlunch-test".to_string(),
             product_code: "HOTLUNCH".to_string(),
             title: "Hotlunch test".to_string(),
+            order_number: String::new(),
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),
@@ -1246,6 +1249,7 @@ mod tests {
             id: "branch-test".to_string(),
             product_code: "HOTLUNCH".to_string(),
             title: "Branch test".to_string(),
+            order_number: String::new(),
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),

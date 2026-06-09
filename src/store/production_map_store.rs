@@ -140,6 +140,7 @@ mod tests {
                 id: "map-1".to_string(),
                 product_code: "HOT".to_string(),
                 title: "Hot".to_string(),
+                order_number: "1234".to_string(),
                 nodes: vec![
                     ProductionMapNode {
                         id: "start".to_string(),
@@ -209,6 +210,7 @@ mod tests {
         let maps = reloaded.maps().await.expect("maps");
         assert_eq!(maps.len(), 1);
         assert_eq!(maps[0].map.product_code, "HOT");
+        assert_eq!(maps[0].map.order_number, "1234");
         assert_eq!(maps[0].program.operations.len(), 3);
         assert_eq!(maps[0].program.operations[1].op_code, "apparatus");
     }
