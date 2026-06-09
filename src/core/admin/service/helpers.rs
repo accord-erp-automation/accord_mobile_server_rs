@@ -44,6 +44,12 @@ pub(super) fn normalize_admin_phone(phone: &str) -> Result<String, AdminPortErro
     normalize_phone(&clean).map_err(|_| AdminPortError::LookupFailed)
 }
 
+pub(super) fn phone_matches(stored: &str, normalized: &str) -> bool {
+    normalize_admin_phone(stored)
+        .map(|phone| phone.eq_ignore_ascii_case(normalized))
+        .unwrap_or_else(|_| stored.trim().eq_ignore_ascii_case(normalized))
+}
+
 pub(super) fn bump_code_regen_state(
     mut state: AdminState,
     now: OffsetDateTime,

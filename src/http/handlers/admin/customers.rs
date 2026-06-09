@@ -36,7 +36,10 @@ pub async fn customers(
                 .create_customer(&input.name, &input.phone)
                 .await
                 .map(json_response)
-                .map_err(|_| server_error("customer create failed"))
+                .map_err(|error| match error {
+                    AdminPortError::InvalidInput(message) => bad_request(message),
+                    _ => server_error("customer create failed"),
+                })
         }
         _ => Err(method_not_allowed()),
     }

@@ -1447,6 +1447,25 @@ async fn admin_create_supplier_and_customer_mutations_like_go() {
 }
 
 #[tokio::test]
+async fn admin_create_customer_rejects_duplicate_phone() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/customers",
+            &token,
+            r#"{"name":"Duplicate Customer","phone":"+998904444444"}"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"], "phone already exists");
+}
+
+#[tokio::test]
 async fn admin_supplier_status_and_remove_mutations_like_go() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
