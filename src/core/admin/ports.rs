@@ -76,9 +76,13 @@ pub trait AdminReadPort: Send + Sync {
     async fn warehouses(
         &self,
         query: &str,
+        parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
         let items = self.items_page(query, limit, 0).await?;
+        if !parent.trim().is_empty() {
+            return Ok(Vec::new());
+        }
         let mut seen = std::collections::BTreeSet::new();
         Ok(items
             .into_iter()
@@ -91,6 +95,7 @@ pub trait AdminReadPort: Send + Sync {
                     warehouse: warehouse.to_string(),
                     company: String::new(),
                     is_group: false,
+                    parent_warehouse: String::new(),
                 })
             })
             .collect())

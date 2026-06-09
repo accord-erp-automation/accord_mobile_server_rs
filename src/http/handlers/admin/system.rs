@@ -44,7 +44,11 @@ pub async fn warehouses(
     let limit = optional_search_limit(query.limit.as_deref(), 30, 500);
     state
         .admin
-        .warehouses(query.q.as_deref().unwrap_or(""), limit)
+        .warehouses(
+            query.q.as_deref().unwrap_or(""),
+            query.parent.as_deref().unwrap_or(""),
+            limit,
+        )
         .await
         .map(json_response)
         .map_err(|_| server_error("admin warehouses fetch failed"))

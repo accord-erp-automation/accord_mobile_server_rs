@@ -158,9 +158,12 @@ impl AdminReadPort for CatalogCacheReader {
     async fn warehouses(
         &self,
         query: &str,
+        parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        self.fallback_admin()?.warehouses(query, limit).await
+        self.fallback_admin()?
+            .warehouses(query, parent, limit)
+            .await
     }
 
     async fn assigned_supplier_items(

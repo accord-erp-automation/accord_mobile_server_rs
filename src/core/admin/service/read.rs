@@ -194,9 +194,10 @@ impl AdminService {
     pub async fn warehouses(
         &self,
         query: &str,
+        parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        self.read_port()?.warehouses(query, limit).await
+        self.read_port()?.warehouses(query, parent, limit).await
     }
 
     pub async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {

@@ -24,6 +24,7 @@ pub struct AdminWarehouse {
     pub warehouse: String,
     pub company: String,
     pub is_group: bool,
+    pub parent_warehouse: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

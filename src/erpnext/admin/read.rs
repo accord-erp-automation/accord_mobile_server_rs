@@ -237,11 +237,24 @@ impl AdminReadPort for ErpnextClient {
     async fn warehouses(
         &self,
         query: &str,
+        parent: &str,
         limit: usize,
     ) -> Result<Vec<crate::core::admin::models::AdminWarehouse>, AdminPortError> {
+        let filters = if parent.trim().is_empty() {
+            r#"[["disabled","=",0]]"#.to_string()
+        } else {
+            serde_json::to_string(&serde_json::json!([
+                ["disabled", "=", 0],
+                ["parent_warehouse", "=", parent.trim()]
+            ]))
+            .unwrap_or_else(|_| r#"[["disabled","=",0]]"#.to_string())
+        };
         let mut params = vec![
-            ("fields", r#"["name","company","is_group"]"#.to_string()),
-            ("filters", r#"[["disabled","=",0]]"#.to_string()),
+            (
+                "fields",
+                r#"["name","company","is_group","parent_warehouse"]"#.to_string(),
+            ),
+            ("filters", filters),
             (
                 "limit_page_length",
                 normalize_limit(limit, 30, 500).to_string(),

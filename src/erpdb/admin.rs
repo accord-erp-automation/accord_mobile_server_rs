@@ -187,6 +187,7 @@ impl AdminReadPort for DirectDbReader {
     async fn warehouses(
         &self,
         query: &str,
+        parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
         let like = like_pattern(query);
@@ -194,6 +195,8 @@ impl AdminReadPort for DirectDbReader {
             .bind(query.trim())
             .bind(&like)
             .bind(&like)
+            .bind(parent.trim())
+            .bind(parent.trim())
             .bind(clamp_limit(limit, 30, 500) as i64)
             .fetch_all(&self.pool)
             .await
@@ -319,6 +322,7 @@ struct AdminWarehouseRow {
     name: String,
     company: String,
     is_group: i32,
+    parent_warehouse: String,
 }
 
 impl AdminWarehouseRow {
@@ -327,6 +331,7 @@ impl AdminWarehouseRow {
             warehouse: self.name.trim().to_string(),
             company: self.company.trim().to_string(),
             is_group: self.is_group != 0,
+            parent_warehouse: self.parent_warehouse.trim().to_string(),
         }
     }
 }
@@ -452,10 +457,12 @@ const ADMIN_WAREHOUSES_SQL: &str = r#"
     SELECT
         name,
         COALESCE(company, '') AS company,
-        COALESCE(is_group, 0) AS is_group
+        COALESCE(is_group, 0) AS is_group,
+        COALESCE(parent_warehouse, '') AS parent_warehouse
     FROM tabWarehouse
     WHERE COALESCE(disabled, 0) = 0
       AND (? = '' OR name LIKE ? ESCAPE '\\' OR company LIKE ? ESCAPE '\\')
+      AND (? = '' OR parent_warehouse = ?)
     ORDER BY is_group ASC, name ASC
     LIMIT ?
 "#;
@@ -515,12 +522,14 @@ mod tests {
             name: " Stores - A ".to_string(),
             company: " Accord ".to_string(),
             is_group: 0,
+            parent_warehouse: " Aparat ".to_string(),
         }
         .into_warehouse();
 
         assert_eq!(warehouse.warehouse, "Stores - A");
         assert_eq!(warehouse.company, "Accord");
         assert!(!warehouse.is_group);
+        assert_eq!(warehouse.parent_warehouse, "Aparat");
     }
 
     #[test]

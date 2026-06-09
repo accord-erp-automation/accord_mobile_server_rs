@@ -65,6 +65,8 @@ pub(super) struct WarehouseRow {
     pub(super) company: String,
     #[serde(default)]
     pub(super) is_group: i32,
+    #[serde(default)]
+    pub(super) parent_warehouse: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +182,7 @@ pub(super) fn warehouse(row: WarehouseRow) -> crate::core::admin::models::AdminW
         warehouse: row.name.trim().to_string(),
         company: row.company.trim().to_string(),
         is_group: row.is_group != 0,
+        parent_warehouse: row.parent_warehouse.trim().to_string(),
     }
 }
 
