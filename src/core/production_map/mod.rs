@@ -45,6 +45,7 @@ pub enum ProductionMapNodeKind {
     Start,
     Location,
     Material,
+    Apparatus,
     Formula,
     Condition,
     Task,
@@ -362,6 +363,7 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
             }
             ProductionMapNodeKind::Location => {}
             ProductionMapNodeKind::Material
+            | ProductionMapNodeKind::Apparatus
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
             | ProductionMapNodeKind::Output => {
@@ -811,6 +813,7 @@ pub fn run_map_with_variables(
             }
             ProductionMapNodeKind::Location => {}
             ProductionMapNodeKind::Material
+            | ProductionMapNodeKind::Apparatus
             | ProductionMapNodeKind::Task
             | ProductionMapNodeKind::Wait
             | ProductionMapNodeKind::Output => {
@@ -950,6 +953,7 @@ fn compile_node(
         ProductionMapNodeKind::Start => "start",
         ProductionMapNodeKind::Location => "warehouse_location",
         ProductionMapNodeKind::Material => "require_material",
+        ProductionMapNodeKind::Apparatus => "apparatus",
         ProductionMapNodeKind::Formula => {
             let Some(formula) = &node.formula else {
                 return Err(ProductionMapError::MissingFormulaExpression);
