@@ -10,7 +10,11 @@ pub async fn production_maps(
     authorize_any_capability(
         &state,
         &headers,
-        &[Capability::AdminAccess, Capability::ProductionMapManage],
+        &[
+            Capability::AdminAccess,
+            Capability::ProductionMapManage,
+            Capability::ApparatusQueueRead,
+        ],
     )
     .await?;
     if !matches!(method, Method::GET | Method::PUT) {
@@ -24,6 +28,12 @@ pub async fn production_maps(
             .map(json_response)
             .map_err(|_| server_error("production maps fetch failed")),
         Method::PUT => {
+            authorize_any_capability(
+                &state,
+                &headers,
+                &[Capability::AdminAccess, Capability::ProductionMapManage],
+            )
+            .await?;
             let input: ProductionMapDefinition = parse_json(&body)?;
             match state.production_maps.upsert_map(input).await {
                 Ok(saved) => Ok(json_response(saved)),

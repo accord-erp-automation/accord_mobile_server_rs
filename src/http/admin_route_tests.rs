@@ -292,6 +292,98 @@ async fn production_map_manage_capability_can_save_maps() {
 }
 
 #[tokio::test]
+async fn apparatus_queue_read_capability_can_only_read_production_maps() {
+    let state = test_state();
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &admin_token,
+            r#"{
+                "id":"queue-test",
+                "product_code":"HOTLUNCH",
+                "title":"Queue test",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {"id":"apparatus","kind":"apparatus","title":"Godex aparat - DEMO"},
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[
+                    {"from":"start","to":"apparatus"},
+                    {"from":"apparatus","to":"end"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("save map");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/roles",
+            &admin_token,
+            r#"{
+                "id":"apparatchi",
+                "label":"Apparatchi",
+                "capability_codes":["apparatus.queue.read"]
+            }"#,
+        ))
+        .await
+        .expect("role response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/role-assignments",
+            &admin_token,
+            r#"{
+                "principal_role":"werka",
+                "principal_ref":"werka",
+                "role_id":"apparatchi"
+            }"#,
+        ))
+        .await
+        .expect("assignment response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue_token = session_for(&state, PrincipalRole::Werka, "werka").await;
+    let response = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps",
+            &queue_token,
+        ))
+        .await
+        .expect("read response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await[0]["map"]["id"], "queue-test");
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &queue_token,
+            r#"{
+                "id":"queue-test-2",
+                "product_code":"HOTLUNCH",
+                "title":"Queue test 2",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[{"from":"start","to":"end"}]
+            }"#,
+        ))
+        .await
+        .expect("write response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn admin_access_capability_can_save_production_maps() {
     let state = test_state();
     let admin_token = session(&state, PrincipalRole::Admin).await;
