@@ -197,7 +197,9 @@ impl AdminService {
         parent: &str,
         limit: usize,
     ) -> Result<Vec<AdminWarehouse>, AdminPortError> {
-        self.read_port()?.warehouses(query, parent, limit).await
+        self.read_port()?
+            .warehouses(query, normalize_warehouse_parent(parent), limit)
+            .await
     }
 
     pub async fn item_group_tree(&self) -> Result<Vec<AdminItemGroup>, AdminPortError> {
@@ -216,5 +218,13 @@ impl AdminService {
 
     pub async fn activity(&self, items: AdminActivity) -> Result<AdminActivity, AdminPortError> {
         Ok(items.into_iter().take(30).collect())
+    }
+}
+
+fn normalize_warehouse_parent(parent: &str) -> &str {
+    if parent.trim().eq_ignore_ascii_case("Aparat") {
+        "aparat - A"
+    } else {
+        parent
     }
 }

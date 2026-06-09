@@ -932,7 +932,7 @@ async fn admin_warehouses_filters_by_parent() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body[0]["warehouse"], "Godex aparat - CH");
-    assert_eq!(body[0]["parent_warehouse"], "Aparat");
+    assert_eq!(body[0]["parent_warehouse"], "aparat - A");
 }
 
 #[tokio::test]
@@ -1631,7 +1631,7 @@ impl AdminReadPort for FakeAdminReadPort {
                 warehouse: "Godex aparat - CH".to_string(),
                 company: "Company".to_string(),
                 is_group: false,
-                parent_warehouse: "Aparat".to_string(),
+                parent_warehouse: "aparat - A".to_string(),
             },
         ];
         let query = query.trim().to_lowercase();
