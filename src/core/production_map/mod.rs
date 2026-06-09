@@ -151,6 +151,8 @@ pub enum ProductionMapError {
     MissingEnd,
     #[error("duplicate node id: {0}")]
     DuplicateNode(String),
+    #[error("order number already belongs to another zakaz")]
+    DuplicateOrderNumber,
     #[error("edge references missing node: {0}")]
     MissingEdgeNode(String),
     #[error("map has a cycle")]
@@ -295,6 +297,7 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
     map.id = map.id.trim().to_ascii_lowercase();
     map.product_code = map.product_code.trim().to_string();
     map.title = map.title.trim().to_string();
+    map.order_number = map.order_number.trim().to_string();
     for node in &mut map.nodes {
         node.id = node.id.trim().to_ascii_lowercase();
         node.title = node.title.trim().to_string();

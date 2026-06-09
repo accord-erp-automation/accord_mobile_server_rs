@@ -69,6 +69,7 @@ impl ProductionMapStorePort for ProductionMapStore {
             .conn
             .lock()
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        reject_duplicate_order_number(&conn, &map)?;
         let payload = serde_json::to_string(&map).map_err(|_| ProductionMapError::StoreFailed)?;
         conn.execute(
             "INSERT INTO production_maps
@@ -90,6 +91,37 @@ impl ProductionMapStorePort for ProductionMapStore {
         .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(())
     }
+}
+
+fn reject_duplicate_order_number(
+    conn: &Connection,
+    map: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    let order_number = map.order_number.trim();
+    if order_number.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare("SELECT payload_json FROM production_maps")
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    for row in rows {
+        let payload = row.map_err(|_| ProductionMapError::StoreFailed)?;
+        let existing = serde_json::from_str::<ProductionMapDefinition>(&payload)
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        if existing.order_number.trim() == order_number && !is_same_zakaz(&existing, map) {
+            return Err(ProductionMapError::DuplicateOrderNumber);
+        }
+    }
+    Ok(())
+}
+
+fn is_same_zakaz(existing: &ProductionMapDefinition, next: &ProductionMapDefinition) -> bool {
+    existing.id.trim() == next.id.trim()
+        && existing.title.trim() == next.title.trim()
+        && existing.product_code.trim() == next.product_code.trim()
 }
 
 fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
@@ -213,5 +245,17 @@ mod tests {
         assert_eq!(maps[0].map.order_number, "1234");
         assert_eq!(maps[0].program.operations.len(), 3);
         assert_eq!(maps[0].program.operations[1].op_code, "apparatus");
+
+        let duplicate = reloaded
+            .upsert_map(ProductionMapDefinition {
+                id: "map-2".to_string(),
+                product_code: "OTHER".to_string(),
+                title: "Other".to_string(),
+                order_number: "1234".to_string(),
+                nodes: maps[0].map.nodes.clone(),
+                edges: maps[0].map.edges.clone(),
+            })
+            .await;
+        assert_eq!(duplicate, Err(ProductionMapError::DuplicateOrderNumber));
     }
 }
