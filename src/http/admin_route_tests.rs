@@ -17,6 +17,7 @@ use crate::core::admin::ports::{
 };
 use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
+use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
@@ -582,6 +583,41 @@ async fn admin_roles_can_list_system_roles_and_save_custom_packages() {
     assert!(value.as_array().expect("roles").iter().any(|role| {
         role["id"] == "scale_operator" && role["capability_codes"][0] == "gscale.catalog.read"
     }));
+}
+
+#[tokio::test]
+async fn admin_roles_hide_legacy_custom_roles_that_conflict_with_system_roles() {
+    let mut state = test_state();
+    let role_store = Arc::new(MemoryRoleDefinitionStore::new());
+    role_store
+        .put_role_definition(RoleDefinition {
+            id: "aparatchi".to_string(),
+            label: "Custom aparatchi".to_string(),
+            base_role: None,
+            capability_codes: vec!["catalog.item.read".to_string()],
+            system: false,
+        })
+        .await
+        .expect("put legacy role");
+    state.admin = state.admin.with_role_store(role_store);
+    let admin_token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/roles", &admin_token))
+        .await
+        .expect("roles response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let roles = json_body(response).await;
+    let aparatchi_roles: Vec<_> = roles
+        .as_array()
+        .expect("roles")
+        .iter()
+        .filter(|role| role["id"] == "aparatchi")
+        .collect();
+    assert_eq!(aparatchi_roles.len(), 1, "{roles}");
+    assert_eq!(aparatchi_roles[0]["label"], "Aparatchi");
+    assert_eq!(aparatchi_roles[0]["system"], true);
 }
 
 #[tokio::test]

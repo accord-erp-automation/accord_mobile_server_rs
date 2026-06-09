@@ -12,11 +12,15 @@ impl AdminService {
 
     async fn all_role_definitions(&self) -> Result<Vec<RoleDefinition>, AdminPortError> {
         let mut roles = system_role_definitions();
+        let system_role_ids: std::collections::BTreeSet<String> =
+            roles.iter().map(|role| role.id.clone()).collect();
         roles.extend(
             self.role_store
                 .role_definitions()
                 .await
-                .map_err(|_| AdminPortError::LookupFailed)?,
+                .map_err(|_| AdminPortError::LookupFailed)?
+                .into_iter()
+                .filter(|role| !system_role_ids.contains(&role.id)),
         );
         roles.sort_by(|left, right| {
             left.system
