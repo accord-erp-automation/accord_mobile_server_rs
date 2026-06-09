@@ -229,7 +229,7 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
                 .unwrap_or("apparatus.queue.read")
                 .to_string(),
         ],
-        base_role: Some(PrincipalRole::Werka),
+        base_role: None,
         system: true,
     });
     roles
@@ -302,7 +302,10 @@ pub fn normalize_role_assignment(
     let Some(role) = roles.iter().find(|role| role.id == role_id) else {
         return Err(RoleAssignmentError::UnknownRole(role_id));
     };
-    if role.system && role.base_role != Some(input.principal_role.clone()) {
+    if let Some(base_role) = &role.base_role
+        && role.system
+        && base_role != &input.principal_role
+    {
         return Err(RoleAssignmentError::RoleBaseMismatch);
     }
     Ok(RoleAssignment {
