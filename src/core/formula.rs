@@ -67,6 +67,7 @@ pub struct CalculateResponse {
     pub color: Option<String>,
     pub kg: f64,
     pub width_mm: f64,
+    pub rubber_size_mm: u32,
     pub waste_percent: f64,
     pub roll_count: Option<f64>,
     pub layers: Vec<LayerInput>,
@@ -113,6 +114,7 @@ pub fn calculate(mut request: CalculateRequest) -> Result<CalculateResponse, Str
         color: clean_option(request.color),
         kg,
         width_mm,
+        rubber_size_mm: rubber_size(width_mm),
         waste_percent,
         roll_count: request.roll_count,
         layers,
@@ -617,6 +619,10 @@ fn clean_option(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn rubber_size(width_mm: f64) -> u32 {
+    ((width_mm / 50.0).ceil() as u32 * 50).clamp(50, 1300)
 }
 
 fn round_up(value: f64, step: f64) -> f64 {

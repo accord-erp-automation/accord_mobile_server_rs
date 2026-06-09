@@ -35,6 +35,24 @@ fn calculates_with_custom_waste_percent() {
 }
 
 #[test]
+fn calculates_rubber_size_from_width() {
+    let cases = [(645.0, 650), (670.0, 700), (50.0, 50), (1400.0, 1300)];
+
+    for (width_mm, rubber_size_mm) in cases {
+        let result = calculate(CalculateRequest {
+            kg: Some(300.0),
+            width_mm: Some(width_mm),
+            first_layer: LayerInput::new("pet", "12"),
+            second_layer: LayerInput::new("pe oq", "30"),
+            ..CalculateRequest::default()
+        })
+        .expect("calculate");
+
+        assert_eq!(result.rubber_size_mm, rubber_size_mm);
+    }
+}
+
+#[test]
 fn calculates_alternative_material_variants() {
     let result = calculate(CalculateRequest {
         kg: Some(300.0),

@@ -35,6 +35,7 @@ async fn calculate_endpoint_returns_formula_result() {
     assert_eq!(body["ok"], true);
     assert_eq!(body["results"][0]["rounded_length"], 12000.0);
     assert_eq!(body["results"][0]["width_sm"], 53.0);
+    assert_eq!(body["rubber_size_mm"], 550);
 }
 
 #[tokio::test]
