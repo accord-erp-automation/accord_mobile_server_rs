@@ -35,6 +35,7 @@ pub async fn warehouses(
             Capability::AdminAccess,
             Capability::ProductionMapManage,
             Capability::CatalogItemRead,
+            Capability::ApparatusQueueRead,
         ],
     )
     .await?;

@@ -254,6 +254,20 @@ async fn production_map_manage_capability_can_save_maps() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/roles", &admin_token))
+        .await
+        .expect("roles response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let roles = json_body(response).await;
+    assert!(
+        roles
+            .as_array()
+            .expect("roles")
+            .iter()
+            .any(|role| role["id"] == "aparatchi")
+    );
+
+    let response = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/role-assignments",
@@ -321,19 +335,19 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = build_router(state.clone())
-        .oneshot(request_with_body(
-            "PUT",
-            "/v1/mobile/admin/roles",
-            &admin_token,
-            r#"{
-                "id":"apparatchi",
-                "label":"Apparatchi",
-                "capability_codes":["apparatus.queue.read"]
-            }"#,
-        ))
+        .oneshot(request("GET", "/v1/mobile/admin/roles", &admin_token))
         .await
-        .expect("role response");
+        .expect("roles response");
     assert_eq!(response.status(), StatusCode::OK);
+    let roles = json_body(response).await;
+    assert!(
+        roles
+            .as_array()
+            .expect("roles")
+            .iter()
+            .any(|role| role["id"] == "aparatchi"),
+        "{roles}"
+    );
 
     let response = build_router(state.clone())
         .oneshot(request_with_body(
@@ -343,12 +357,19 @@ async fn apparatus_queue_read_capability_can_only_read_production_maps() {
             r#"{
                 "principal_role":"werka",
                 "principal_ref":"werka",
-                "role_id":"apparatchi"
+                "role_id":"aparatchi",
+                "assigned_apparatus":["Godex aparat - DEMO"]
             }"#,
         ))
         .await
         .expect("assignment response");
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["assigned_apparatus"],
+        serde_json::json!(["Godex aparat - DEMO"])
+    );
 
     let queue_token = session_for(&state, PrincipalRole::Werka, "werka").await;
     let response = build_router(state.clone())
@@ -674,7 +695,8 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
             r#"{
                 "principal_role":"werka",
                 "principal_ref":"werka",
-                "role_id":"scale_only"
+                "role_id":"scale_only",
+                "assigned_apparatus":["Paket aparat"]
             }"#,
         ))
         .await
@@ -695,6 +717,10 @@ async fn login_returns_effective_capabilities_for_assigned_custom_role() {
     assert_eq!(
         value["capabilities"],
         serde_json::json!(["gscale.catalog.read", "gscale.print", "rps.batch.manage"])
+    );
+    assert_eq!(
+        value["assigned_apparatus"],
+        serde_json::json!(["Paket aparat"])
     );
 }
 

@@ -84,6 +84,8 @@ pub struct RoleAssignment {
     pub principal_role: PrincipalRole,
     pub principal_ref: String,
     pub role_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_apparatus: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -91,6 +93,8 @@ pub struct RoleAssignmentUpsert {
     pub principal_role: PrincipalRole,
     pub principal_ref: String,
     pub role_id: String,
+    #[serde(default)]
+    pub assigned_apparatus: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -202,7 +206,7 @@ pub fn capability_by_code(code: &str) -> Option<&'static CapabilityDefinition> {
 }
 
 pub fn system_role_definitions() -> Vec<RoleDefinition> {
-    [
+    let mut roles: Vec<RoleDefinition> = [
         (PrincipalRole::Admin, "admin", "Admin"),
         (PrincipalRole::Werka, "werka", "Werka"),
         (PrincipalRole::Supplier, "supplier", "Supplier"),
@@ -216,7 +220,19 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
         base_role: Some(role),
         system: true,
     })
-    .collect()
+    .collect();
+    roles.push(RoleDefinition {
+        id: "aparatchi".to_string(),
+        label: "Aparatchi".to_string(),
+        capability_codes: vec![
+            capability_code(Capability::ApparatusQueueRead)
+                .unwrap_or("apparatus.queue.read")
+                .to_string(),
+        ],
+        base_role: Some(PrincipalRole::Werka),
+        system: true,
+    });
+    roles
 }
 
 pub fn normalize_custom_role(
@@ -293,6 +309,7 @@ pub fn normalize_role_assignment(
         principal_role: input.principal_role,
         principal_ref,
         role_id,
+        assigned_apparatus: normalize_assigned_apparatus(input.assigned_apparatus),
     })
 }
 
@@ -333,7 +350,17 @@ fn role_key(role: &PrincipalRole) -> &'static str {
 }
 
 fn system_role_ids() -> BTreeSet<&'static str> {
-    ["admin", "werka", "supplier", "customer"]
+    ["admin", "werka", "supplier", "customer", "aparatchi"]
+        .into_iter()
+        .collect()
+}
+
+fn normalize_assigned_apparatus(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }

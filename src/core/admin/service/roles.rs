@@ -83,19 +83,18 @@ impl AdminService {
         }
     }
 
+    pub async fn principal_assigned_apparatus(&self, principal: &Principal) -> Vec<String> {
+        match self.principal_assignment(principal).await {
+            Ok(Some(assignment)) => assignment.assigned_apparatus,
+            _ => Vec::new(),
+        }
+    }
+
     async fn principal_assigned_role(
         &self,
         principal: &Principal,
     ) -> Result<Option<RoleDefinition>, AdminPortError> {
-        let key = role_assignment_key(&principal.role, &principal.ref_);
-        let Some(assignment) = self
-            .role_assignments()
-            .await?
-            .into_iter()
-            .find(|assignment| {
-                role_assignment_key(&assignment.principal_role, &assignment.principal_ref) == key
-            })
-        else {
+        let Some(assignment) = self.principal_assignment(principal).await? else {
             return Ok(None);
         };
         self.all_role_definitions()
@@ -104,5 +103,19 @@ impl AdminService {
             .find(|role| role.id == assignment.role_id)
             .map(Some)
             .ok_or(AdminPortError::LookupFailed)
+    }
+
+    async fn principal_assignment(
+        &self,
+        principal: &Principal,
+    ) -> Result<Option<RoleAssignment>, AdminPortError> {
+        let key = role_assignment_key(&principal.role, &principal.ref_);
+        Ok(self
+            .role_assignments()
+            .await?
+            .into_iter()
+            .find(|assignment| {
+                role_assignment_key(&assignment.principal_role, &assignment.principal_ref) == key
+            }))
     }
 }

@@ -178,6 +178,7 @@ mod tests {
                 principal_role: PrincipalRole::Werka,
                 principal_ref: "werka".to_string(),
                 role_id: "catalog_only".to_string(),
+                assigned_apparatus: vec!["Godex aparat - DEMO".to_string()],
             })
             .await
             .expect("put assignment");

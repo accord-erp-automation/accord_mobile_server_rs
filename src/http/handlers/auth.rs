@@ -44,11 +44,13 @@ pub async fn login(
         None
     };
     let capabilities = state.admin.principal_capability_codes(&principal).await;
+    let assigned_apparatus = state.admin.principal_assigned_apparatus(&principal).await;
 
     Ok(Json(LoginResponse {
         profile: with_avatar_proxy(&headers, principal, &token),
         token,
         capabilities,
+        assigned_apparatus,
         werka_home,
     }))
 }
