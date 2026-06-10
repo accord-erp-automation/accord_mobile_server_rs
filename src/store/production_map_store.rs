@@ -173,6 +173,8 @@ mod tests {
                 product_code: "HOT".to_string(),
                 title: "Hot".to_string(),
                 order_number: "1234".to_string(),
+                roll_count: Some(7.0),
+                width_mm: Some(650.0),
                 nodes: vec![
                     ProductionMapNode {
                         id: "start".to_string(),
@@ -243,6 +245,8 @@ mod tests {
         assert_eq!(maps.len(), 1);
         assert_eq!(maps[0].map.product_code, "HOT");
         assert_eq!(maps[0].map.order_number, "1234");
+        assert_eq!(maps[0].map.roll_count, Some(7.0));
+        assert_eq!(maps[0].map.width_mm, Some(650.0));
         assert_eq!(maps[0].program.operations.len(), 3);
         assert_eq!(maps[0].program.operations[1].op_code, "apparatus");
 
@@ -252,6 +256,8 @@ mod tests {
                 product_code: "OTHER".to_string(),
                 title: "Other".to_string(),
                 order_number: "1234".to_string(),
+                roll_count: None,
+                width_mm: None,
                 nodes: maps[0].map.nodes.clone(),
                 edges: maps[0].map.edges.clone(),
             })

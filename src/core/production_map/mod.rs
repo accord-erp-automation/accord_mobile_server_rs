@@ -12,6 +12,10 @@ pub struct ProductionMapDefinition {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub order_number: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roll_count: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_mm: Option<f64>,
     #[serde(default)]
     pub nodes: Vec<ProductionMapNode>,
     #[serde(default)]
@@ -298,6 +302,18 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
     map.product_code = map.product_code.trim().to_string();
     map.title = map.title.trim().to_string();
     map.order_number = map.order_number.trim().to_string();
+    if map
+        .roll_count
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        map.roll_count = None;
+    }
+    if map
+        .width_mm
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        map.width_mm = None;
+    }
     for node in &mut map.nodes {
         node.id = node.id.trim().to_ascii_lowercase();
         node.title = node.title.trim().to_string();
@@ -1170,6 +1186,8 @@ mod tests {
             product_code: "HOTLUNCH".to_string(),
             title: "Hotlunch test".to_string(),
             order_number: String::new(),
+            roll_count: None,
+            width_mm: None,
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),
@@ -1253,6 +1271,8 @@ mod tests {
             product_code: "HOTLUNCH".to_string(),
             title: "Branch test".to_string(),
             order_number: String::new(),
+            roll_count: None,
+            width_mm: None,
             nodes: vec![
                 ProductionMapNode {
                     id: "start".to_string(),
