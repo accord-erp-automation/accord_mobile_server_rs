@@ -5,8 +5,8 @@ use crate::config::AppConfig;
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::ports::{
-    AdminAccessState, AdminAccessStateLookup, AuthConfigSink, CustomerLookup, SupplierLookup,
-    SupplierRecord,
+    AdminAccessState, AdminAccessStateLookup, AuthConfigSink, CustomerLookup, CustomerRecord,
+    SupplierLookup, SupplierRecord,
 };
 
 #[derive(Clone)]
@@ -104,6 +104,7 @@ impl AuthService {
             PrincipalRole::Supplier => self.login_supplier(&normalized_phone, code).await,
             PrincipalRole::Werka => self.login_werka(normalized_phone, code, &identity),
             PrincipalRole::Customer => self.login_customer(&normalized_phone, code).await,
+            PrincipalRole::Aparatchi => self.login_aparatchi(&normalized_phone, code).await,
             PrincipalRole::Admin => Err(AuthError::InvalidRole),
         }
     }
@@ -175,6 +176,25 @@ impl AuthService {
         normalized_phone: &str,
         code: &str,
     ) -> Result<Principal, AuthError> {
+        self.login_customer_party(normalized_phone, code, PrincipalRole::Customer)
+            .await
+    }
+
+    async fn login_aparatchi(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+    ) -> Result<Principal, AuthError> {
+        self.login_customer_party(normalized_phone, code, PrincipalRole::Aparatchi)
+            .await
+    }
+
+    async fn login_customer_party(
+        &self,
+        normalized_phone: &str,
+        code: &str,
+        role: PrincipalRole,
+    ) -> Result<Principal, AuthError> {
         let customer_lookup = self
             .customer_lookup
             .as_ref()
@@ -184,24 +204,9 @@ impl AuthService {
             .as_ref()
             .ok_or(AuthError::InvalidCredentials)?;
 
-        let mut customers = customer_lookup
-            .search_customers(normalized_phone, 50)
-            .await
-            .map_err(|_| AuthError::Internal)?;
-        if customers.is_empty()
-            && let Some(local_phone) = local_phone_query(normalized_phone)
-        {
-            customers = customer_lookup
-                .search_customers(&local_phone, 50)
-                .await
-                .map_err(|_| AuthError::Internal)?;
-        }
-        if customers.is_empty() {
-            customers = customer_lookup
-                .search_customers("", 500)
-                .await
-                .map_err(|_| AuthError::Internal)?;
-        }
+        let customers = self
+            .search_customers_for_login(customer_lookup.as_ref(), normalized_phone)
+            .await?;
 
         let states = admin_state_lookup
             .list_states()
@@ -218,7 +223,7 @@ impl AuthService {
                 && phone_matches_normalized(&customer.phone, normalized_phone)
             {
                 return Ok(Principal {
-                    role: PrincipalRole::Customer,
+                    role: role.clone(),
                     display_name: customer.name.clone(),
                     legal_name: customer.name,
                     ref_: customer.id,
@@ -229,6 +234,31 @@ impl AuthService {
         }
 
         Err(AuthError::InvalidCredentials)
+    }
+
+    async fn search_customers_for_login(
+        &self,
+        customer_lookup: &dyn CustomerLookup,
+        normalized_phone: &str,
+    ) -> Result<Vec<CustomerRecord>, AuthError> {
+        let mut customers = customer_lookup
+            .search_customers(normalized_phone, 50)
+            .await
+            .map_err(|_| AuthError::Internal)?;
+        if let Some(local_phone) = local_phone_query(normalized_phone) {
+            let local_matches = customer_lookup
+                .search_customers(&local_phone, 50)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+            merge_customer_records(&mut customers, local_matches);
+        }
+        if customers.is_empty() {
+            customers = customer_lookup
+                .search_customers("", 500)
+                .await
+                .map_err(|_| AuthError::Internal)?;
+        }
+        Ok(customers)
     }
 
     fn login_werka(
@@ -262,6 +292,8 @@ impl AuthService {
             Ok(PrincipalRole::Supplier)
         } else if trimmed.starts_with(&self.werka_prefix) {
             Ok(PrincipalRole::Werka)
+        } else if trimmed.starts_with("40") {
+            Ok(PrincipalRole::Aparatchi)
         } else if trimmed.starts_with("30") {
             Ok(PrincipalRole::Customer)
         } else {
@@ -349,6 +381,18 @@ fn phone_matches_normalized(stored_phone: &str, normalized_login_phone: &str) ->
                 .trim()
                 .eq_ignore_ascii_case(normalized_login_phone)
         })
+}
+
+fn merge_customer_records(customers: &mut Vec<CustomerRecord>, extra: Vec<CustomerRecord>) {
+    for record in extra {
+        if customers
+            .iter()
+            .any(|existing| existing.id.trim() == record.id.trim())
+        {
+            continue;
+        }
+        customers.push(record);
+    }
 }
 
 fn local_phone_query(normalized_phone: &str) -> Option<String> {

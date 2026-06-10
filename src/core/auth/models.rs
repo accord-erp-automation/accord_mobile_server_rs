@@ -8,6 +8,7 @@ pub enum PrincipalRole {
     Supplier,
     Werka,
     Customer,
+    Aparatchi,
     Admin,
 }
 

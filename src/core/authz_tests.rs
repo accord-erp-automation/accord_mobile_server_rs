@@ -28,6 +28,24 @@ fn aparatchi_system_role_assigns_to_customer_principal() {
 }
 
 #[test]
+fn aparatchi_system_role_assigns_to_aparatchi_principal() {
+    let roles = system_role_definitions();
+    let assignment = normalize_role_assignment(
+        RoleAssignmentUpsert {
+            principal_role: PrincipalRole::Aparatchi,
+            principal_ref: "aparatchi - 4".to_string(),
+            role_id: "aparatchi".to_string(),
+            assigned_apparatus: vec!["7 ta rangli pechat - A".to_string()],
+        },
+        &roles,
+    )
+    .expect("aparatchi assignment");
+
+    assert_eq!(assignment.principal_role, PrincipalRole::Aparatchi);
+    assert_eq!(assignment.principal_ref, "aparatchi - 4");
+}
+
+#[test]
 fn core_system_role_rejects_wrong_principal_role() {
     let error = normalize_role_assignment(
         RoleAssignmentUpsert {

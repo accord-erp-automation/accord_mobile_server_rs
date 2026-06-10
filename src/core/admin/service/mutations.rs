@@ -231,12 +231,25 @@ impl AdminService {
         let mut state = self.state_for(&entry.ref_).await?;
         let now = OffsetDateTime::now_utc();
         state = bump_code_regen_state(state, now)?;
-        state.custom_code = random_code("30", &mut existing);
+        let prefix = self.customer_access_code_prefix(&entry.ref_).await?;
+        state.custom_code = random_code(&prefix, &mut existing);
         self.put_state(&entry.ref_, state.clone()).await?;
         self.write_port()?
             .update_customer_code(&entry.ref_, &state.custom_code)
             .await?;
         self.customer_detail(&entry.ref_).await
+    }
+
+    async fn customer_access_code_prefix(&self, ref_: &str) -> Result<String, AdminPortError> {
+        let assignments = self.role_assignments().await?;
+        let ref_ = ref_.trim();
+        if assignments.iter().any(|assignment| {
+            assignment.role_id == "aparatchi" && assignment.principal_ref.trim() == ref_
+        }) {
+            Ok("40".to_string())
+        } else {
+            Ok("30".to_string())
+        }
     }
 
     pub async fn remove_supplier(&self, ref_: &str) -> Result<(), AdminPortError> {

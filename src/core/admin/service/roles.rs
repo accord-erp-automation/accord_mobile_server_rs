@@ -113,13 +113,20 @@ impl AdminService {
         &self,
         principal: &Principal,
     ) -> Result<Option<RoleAssignment>, AdminPortError> {
+        let assignments = self.role_assignments().await?;
         let key = role_assignment_key(&principal.role, &principal.ref_);
-        Ok(self
-            .role_assignments()
-            .await?
-            .into_iter()
-            .find(|assignment| {
-                role_assignment_key(&assignment.principal_role, &assignment.principal_ref) == key
-            }))
+        if let Some(assignment) = assignments.iter().find(|assignment| {
+            role_assignment_key(&assignment.principal_role, &assignment.principal_ref) == key
+        }) {
+            return Ok(Some(assignment.clone()));
+        }
+        if principal.role == PrincipalRole::Aparatchi {
+            let fallback_key = role_assignment_key(&PrincipalRole::Customer, &principal.ref_);
+            return Ok(assignments.into_iter().find(|assignment| {
+                role_assignment_key(&assignment.principal_role, &assignment.principal_ref)
+                    == fallback_key
+            }));
+        }
+        Ok(None)
     }
 }

@@ -143,6 +143,30 @@ pub fn build_router(state: AppState) -> Router {
             any(admin::production_map_run),
         )
         .route(
+            "/v1/mobile/admin/production-maps/with-order",
+            any(admin::production_map_save_with_order),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/move",
+            any(admin::production_map_move),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/move-batch",
+            any(admin::production_map_move_batch),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/sequence",
+            any(admin::production_map_sequence),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/live",
+            any(admin::production_map_live),
+        )
+        .route(
+            "/v1/mobile/admin/production-maps/queue-action",
+            any(admin::production_map_queue_action),
+        )
+        .route(
             "/v1/mobile/admin/role-assignments",
             any(admin::role_assignments),
         )

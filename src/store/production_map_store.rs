@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapError, ProductionMapStorePort,
@@ -69,28 +70,208 @@ impl ProductionMapStorePort for ProductionMapStore {
             .conn
             .lock()
             .map_err(|_| ProductionMapError::StoreFailed)?;
+        reject_order_number_immutable(&conn, &map)?;
         reject_duplicate_order_number(&conn, &map)?;
-        let payload = serde_json::to_string(&map).map_err(|_| ProductionMapError::StoreFailed)?;
+        put_map_inner(&conn, &map)
+    }
+
+    async fn put_maps_batch(
+        &self,
+        maps: &[ProductionMapDefinition],
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        conn.execute("BEGIN IMMEDIATE", [])
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let result = (|| {
+            for map in maps {
+                reject_order_number_immutable(&conn, map)?;
+                reject_duplicate_order_number(&conn, map)?;
+                put_map_inner(&conn, map)?;
+            }
+            Ok::<(), ProductionMapError>(())
+        })();
+        if result.is_ok() {
+            conn.execute("COMMIT", [])
+                .map_err(|_| ProductionMapError::StoreFailed)?;
+        } else {
+            let _ = conn.execute("ROLLBACK", []);
+        }
+        result
+    }
+
+    async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
         conn.execute(
-            "INSERT INTO production_maps
-                (id, product_code, title, saved_at, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET
-                product_code = excluded.product_code,
-                title = excluded.title,
-                saved_at = excluded.saved_at,
-                payload_json = excluded.payload_json",
-            params![
-                map.id.trim(),
-                map.product_code.trim(),
-                map.title.trim(),
-                unix_micros().to_string(),
-                payload
-            ],
+            "DELETE FROM production_maps WHERE id = ?1",
+            params![map_id.trim()],
         )
         .map_err(|_| ProductionMapError::StoreFailed)?;
         Ok(())
     }
+
+    async fn apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare("SELECT apparatus, order_ids_json FROM apparatus_sequences")
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let apparatus: String = row.get(0)?;
+                let payload: String = row.get(1)?;
+                let order_ids = serde_json::from_str::<Vec<String>>(&payload)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                Ok((apparatus, order_ids))
+            })
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        rows.collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(|_| ProductionMapError::StoreFailed)
+    }
+
+    async fn put_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let payload =
+            serde_json::to_string(&order_ids).map_err(|_| ProductionMapError::StoreFailed)?;
+        conn.execute(
+            "INSERT INTO apparatus_sequences (apparatus, order_ids_json, saved_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(apparatus) DO UPDATE SET
+                order_ids_json = excluded.order_ids_json,
+                saved_at = excluded.saved_at",
+            params![apparatus.trim(), payload, unix_micros().to_string()],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        Ok(())
+    }
+
+    async fn apparatus_queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare("SELECT apparatus, order_id, state FROM apparatus_queue_states")
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let mut grouped = BTreeMap::<String, BTreeMap<String, String>>::new();
+        for row in rows {
+            let (apparatus, order_id, state) =
+                row.map_err(|_| ProductionMapError::StoreFailed)?;
+            grouped
+                .entry(apparatus)
+                .or_default()
+                .insert(order_id, state);
+        }
+        Ok(grouped)
+    }
+
+    async fn put_apparatus_queue_states(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+    ) -> Result<(), ProductionMapError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        let apparatus = apparatus.trim();
+        conn.execute(
+            "DELETE FROM apparatus_queue_states WHERE apparatus = ?1",
+            params![apparatus],
+        )
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+        for (order_id, state) in states {
+            conn.execute(
+                "INSERT INTO apparatus_queue_states (apparatus, order_id, state, saved_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![apparatus, order_id.trim(), state.trim(), unix_micros().to_string()],
+            )
+            .map_err(|_| ProductionMapError::StoreFailed)?;
+        }
+        Ok(())
+    }
+}
+
+fn put_map_inner(conn: &Connection, map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
+    let payload = serde_json::to_string(map).map_err(|_| ProductionMapError::StoreFailed)?;
+    conn.execute(
+        "INSERT INTO production_maps
+            (id, product_code, title, saved_at, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(id) DO UPDATE SET
+            product_code = excluded.product_code,
+            title = excluded.title,
+            saved_at = excluded.saved_at,
+            payload_json = excluded.payload_json",
+        params![
+            map.id.trim(),
+            map.product_code.trim(),
+            map.title.trim(),
+            unix_micros().to_string(),
+            payload
+        ],
+    )
+    .map_err(|_| ProductionMapError::StoreFailed)?;
+    Ok(())
+}
+
+fn reject_order_number_immutable(
+    conn: &Connection,
+    map: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    let id = map.id.trim();
+    if !id.starts_with("zakaz-") {
+        return Ok(());
+    }
+    let order_number = map.order_number.trim();
+    if order_number.is_empty() {
+        return Ok(());
+    }
+    let existing = conn
+        .query_row(
+            "SELECT payload_json FROM production_maps WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let Some(payload) = existing else {
+        return Ok(());
+    };
+    let existing_map = serde_json::from_str::<ProductionMapDefinition>(&payload)
+        .map_err(|_| ProductionMapError::StoreFailed)?;
+    let existing_number = existing_map.order_number.trim();
+    if !existing_number.is_empty() && existing_number != order_number {
+        return Err(ProductionMapError::OrderNumberImmutable);
+    }
+    Ok(())
 }
 
 fn reject_duplicate_order_number(
@@ -143,7 +324,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_production_maps_saved
             ON production_maps(saved_at DESC);
         CREATE INDEX IF NOT EXISTS idx_production_maps_product_code
-            ON production_maps(product_code);",
+            ON production_maps(product_code);
+        CREATE TABLE IF NOT EXISTS apparatus_sequences (
+            apparatus TEXT PRIMARY KEY,
+            order_ids_json TEXT NOT NULL,
+            saved_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS apparatus_queue_states (
+            apparatus TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            PRIMARY KEY (apparatus, order_id)
+        );",
     )
 }
 
@@ -172,6 +365,7 @@ mod tests {
                 id: "map-1".to_string(),
                 product_code: "HOT".to_string(),
                 title: "Hot".to_string(),
+                code: "Z-HOT-1".to_string(),
                 order_number: "1234".to_string(),
                 roll_count: Some(7.0),
                 width_mm: Some(650.0),
@@ -255,6 +449,7 @@ mod tests {
                 id: "map-2".to_string(),
                 product_code: "OTHER".to_string(),
                 title: "Other".to_string(),
+                code: String::new(),
                 order_number: "1234".to_string(),
                 roll_count: None,
                 width_mm: None,

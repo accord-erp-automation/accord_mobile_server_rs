@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::service::AdminService;
+use crate::core::auth::admin_read_lookup::AdminReadAuthLookup;
 use crate::core::auth::service::AuthService;
 use crate::core::calculate_orders::CalculateOrderStorePort;
 use crate::core::customer::service::CustomerService;
@@ -128,8 +129,10 @@ impl AppState {
         }
 
         let mut erp_client = None;
+        let mut admin_state_store = None;
         if config.erp_configured() {
-            let admin_state_store = Arc::new(build_admin_supplier_state_store(&config));
+            let state_store = Arc::new(build_admin_supplier_state_store(&config));
+            admin_state_store = Some(state_store.clone());
             let client = Arc::new(
                 ErpnextClient::new(
                     config.erp_url.clone(),
@@ -143,9 +146,9 @@ impl AppState {
                 .with_read_port(client.clone())
                 .with_write_port(client.clone())
                 .with_erp_config_sink(client.clone())
-                .with_state_port(admin_state_store.clone());
-            auth = auth.with_supplier_dependencies(client.clone(), admin_state_store.clone());
-            auth = auth.with_customer_dependencies(client.clone(), admin_state_store.clone());
+                .with_state_port(state_store.clone());
+            auth = auth.with_supplier_dependencies(client.clone(), state_store.clone());
+            auth = auth.with_customer_dependencies(client.clone(), state_store.clone());
             customer = customer.with_delivery_port(client.clone());
             profiles = profiles.with_erp_lookup(client.clone());
             gscale = gscale.with_erp(client.clone());
@@ -158,7 +161,7 @@ impl AppState {
                 .with_supplier_item_lookup(client.clone())
                 .with_confirm_writer(client.clone())
                 .with_notification_detail_writer(client.clone())
-                .with_supplier_admin_state_lookup(admin_state_store);
+                .with_supplier_admin_state_lookup(state_store);
             erp_client = Some(client);
         }
         match config.direct_db_config() {
@@ -216,6 +219,12 @@ impl AppState {
                         .with_notification_detail_lookup(direct_reader.clone())
                         .with_supplier_read_lookup(direct_reader.clone());
                     profiles = profiles.with_read_lookup(catalog_reader.clone());
+                    if let Some(state_store) = admin_state_store.clone() {
+                        let lookup = Arc::new(AdminReadAuthLookup::new(catalog_reader));
+                        auth = auth.with_supplier_dependencies(lookup.clone(), state_store.clone());
+                        auth = auth.with_customer_dependencies(lookup, state_store);
+                        tracing::info!("auth login lookup uses catalog/direct DB reads");
+                    }
                 } else {
                     admin = admin
                         .with_read_port(direct_reader.clone())
@@ -226,6 +235,12 @@ impl AppState {
                         .with_notification_detail_lookup(direct_reader.clone())
                         .with_supplier_read_lookup(direct_reader.clone());
                     profiles = profiles.with_read_lookup(direct_reader.clone());
+                    if let Some(state_store) = admin_state_store.clone() {
+                        let lookup = Arc::new(AdminReadAuthLookup::new(direct_reader.clone()));
+                        auth = auth.with_supplier_dependencies(lookup.clone(), state_store.clone());
+                        auth = auth.with_customer_dependencies(lookup, state_store);
+                        tracing::info!("auth login lookup uses direct DB reads");
+                    }
                 }
             }
             Ok(None) => {}

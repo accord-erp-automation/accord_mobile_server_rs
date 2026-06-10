@@ -78,23 +78,32 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             .conn
             .lock()
             .map_err(|_| CalculateOrderError::StoreFailed)?;
-        let existing = existing_id(&conn, owner_key, &template.name)?;
-        let saved = stamp_template(template, existing);
-        let lower_name = normalize_name(&saved.name);
+        let mut incoming = template;
+        if incoming.code.trim().is_empty() {
+            incoming.code = format!("Z-{}", new_id());
+        }
+        let existing = existing_id_by_code(&conn, owner_key, &incoming.code)?;
+        let saved = stamp_template(incoming, existing);
+        let lower_code = normalize_key(&saved.code);
+        let lower_name = normalize_key(&saved.name);
         let payload =
             serde_json::to_string(&saved).map_err(|_| CalculateOrderError::StoreFailed)?;
         conn.execute(
             "INSERT INTO calculate_order_templates
-                (id, owner_key, name, lower_name, saved_at, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(owner_key, lower_name) DO UPDATE SET
+                (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(owner_key, lower_code) DO UPDATE SET
                 id = excluded.id,
+                code = excluded.code,
                 name = excluded.name,
+                lower_name = excluded.lower_name,
                 saved_at = excluded.saved_at,
                 payload_json = excluded.payload_json",
             params![
                 saved.id,
                 owner_key.trim(),
+                saved.code,
+                lower_code,
                 saved.name,
                 lower_name,
                 saved.saved_at,
@@ -119,17 +128,17 @@ impl CalculateOrderStorePort for CalculateOrderStore {
     }
 }
 
-fn existing_id(
+fn existing_id_by_code(
     conn: &Connection,
     owner_key: &str,
-    name: &str,
+    code: &str,
 ) -> Result<Option<String>, CalculateOrderError> {
     conn.query_row(
         "SELECT id
          FROM calculate_order_templates
-         WHERE owner_key = ?1 AND lower_name = ?2
+         WHERE owner_key = ?1 AND lower_code = ?2
          LIMIT 1",
-        params![owner_key.trim(), normalize_name(name)],
+        params![owner_key.trim(), normalize_key(code)],
         |row| row.get(0),
     )
     .optional()
@@ -144,6 +153,7 @@ fn stamp_template(
         .filter(|id| !id.trim().is_empty())
         .or_else(|| (!template.id.trim().is_empty()).then(|| template.id.trim().to_string()))
         .unwrap_or_else(new_id);
+    template.code = template.code.trim().to_string();
     template.name = template.name.trim().to_string();
     template.order_number = template.order_number.trim().to_string();
     template.customer_ref = template.customer_ref.trim().to_string();
@@ -180,18 +190,104 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS calculate_order_templates (
             id TEXT PRIMARY KEY,
             owner_key TEXT NOT NULL,
+            code TEXT NOT NULL DEFAULT '',
+            lower_code TEXT NOT NULL DEFAULT '',
             name TEXT NOT NULL,
             lower_name TEXT NOT NULL,
             saved_at TEXT NOT NULL,
             payload_json TEXT NOT NULL,
-            UNIQUE(owner_key, lower_name)
+            UNIQUE(owner_key, lower_code)
         );
         CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_saved
-            ON calculate_order_templates(owner_key, saved_at DESC);",
+            ON calculate_order_templates(owner_key, saved_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
+            ON calculate_order_templates(owner_key, lower_name);",
+    )?;
+    ensure_code_columns(conn)
+}
+
+fn ensure_code_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let has_code: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM pragma_table_info('calculate_order_templates')
+         WHERE name = 'code'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_code > 0 {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "ALTER TABLE calculate_order_templates ADD COLUMN code TEXT NOT NULL DEFAULT '';
+         ALTER TABLE calculate_order_templates ADD COLUMN lower_code TEXT NOT NULL DEFAULT '';
+         UPDATE calculate_order_templates
+            SET code = 'Z-' || id,
+                lower_code = lower('Z-' || id)
+          WHERE trim(code) = '';
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_code
+            ON calculate_order_templates(owner_key, lower_code);",
+    )?;
+
+    rebuild_without_name_unique(conn)
+}
+
+fn rebuild_without_name_unique(conn: &Connection) -> rusqlite::Result<()> {
+    let uses_name_unique: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND name = 'calculate_order_templates'
+           AND sql LIKE '%UNIQUE(owner_key, lower_name)%'",
+        [],
+        |row| row.get(0),
+    )?;
+    if uses_name_unique == 0 {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE calculate_order_templates_next (
+            id TEXT PRIMARY KEY,
+            owner_key TEXT NOT NULL,
+            code TEXT NOT NULL,
+            lower_code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            lower_name TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            UNIQUE(owner_key, lower_code)
+        );
+        INSERT INTO calculate_order_templates_next
+            (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
+        SELECT
+            id,
+            owner_key,
+            CASE
+                WHEN trim(code) != '' THEN trim(code)
+                ELSE 'Z-' || id
+            END,
+            lower(
+                CASE
+                    WHEN trim(code) != '' THEN trim(code)
+                    ELSE 'Z-' || id
+                END
+            ),
+            name,
+            lower_name,
+            saved_at,
+            payload_json
+        FROM calculate_order_templates;
+        DROP TABLE calculate_order_templates;
+        ALTER TABLE calculate_order_templates_next RENAME TO calculate_order_templates;
+        CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_saved
+            ON calculate_order_templates(owner_key, saved_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
+            ON calculate_order_templates(owner_key, lower_name);",
     )
 }
 
-fn normalize_name(value: &str) -> String {
+fn normalize_key(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
@@ -221,6 +317,7 @@ mod tests {
                 "admin:admin",
                 CalculateOrderTemplate {
                     id: String::new(),
+                    code: "Z-CPP-600".to_string(),
                     name: "CPP 600".to_string(),
                     saved_at: String::new(),
                     order_number: "ORD-1".to_string(),
@@ -292,5 +389,69 @@ mod tests {
             .await
             .expect("delete");
         assert!(reloaded.list("admin:admin").await.expect("list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn calculate_order_sqlite_store_allows_same_name_with_different_codes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
+
+        let base = CalculateOrderTemplate {
+            id: String::new(),
+            code: String::new(),
+            name: "Qurt".to_string(),
+            saved_at: String::new(),
+            order_number: String::new(),
+            customer_ref: String::new(),
+            customer: String::new(),
+            item_code: "QURT-001".to_string(),
+            product: "Qurt".to_string(),
+            status: String::new(),
+            material_display: String::new(),
+            color: String::new(),
+            image_id: String::new(),
+            image_name: String::new(),
+            image_mime: String::new(),
+            image_size_bytes: 0,
+            image_url: String::new(),
+            width_mm: 530.0,
+            waste_percent: 5.0,
+            roll_count: Some(7.0),
+            first_layer_material: "pet".to_string(),
+            first_layer_micron: "12".to_string(),
+            second_layer_material: "pe oq".to_string(),
+            second_layer_micron: "30".to_string(),
+            third_layer_material: String::new(),
+            third_layer_micron: String::new(),
+            note: String::new(),
+        };
+
+        let first = store
+            .upsert("admin:admin", base.clone())
+            .await
+            .expect("first save");
+        let second = store
+            .upsert("admin:admin", base)
+            .await
+            .expect("second save");
+
+        assert_ne!(first.code, second.code);
+        assert_eq!(first.name, "Qurt");
+        assert_eq!(second.name, "Qurt");
+        assert_eq!(store.list("admin:admin").await.expect("list").len(), 2);
+
+        let updated = store
+            .upsert(
+                "admin:admin",
+                CalculateOrderTemplate {
+                    width_mm: 640.0,
+                    ..second.clone()
+                },
+            )
+            .await
+            .expect("update second");
+        assert_eq!(updated.id, second.id);
+        assert_eq!(updated.width_mm, 640.0);
+        assert_eq!(store.list("admin:admin").await.expect("list").len(), 2);
     }
 }

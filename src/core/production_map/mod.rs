@@ -3,13 +3,19 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
+
+pub mod chain;
+pub mod pechat;
+pub mod queue_state;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapDefinition {
     pub id: String,
     pub product_code: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub order_number: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,6 +103,26 @@ pub struct ProductionMapSaved {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapMoveRequest {
+    #[serde(default)]
+    pub map_id: String,
+    #[serde(default)]
+    pub from_apparatus: String,
+    #[serde(default)]
+    pub to_apparatus: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionMapBatchMoveRequest {
+    #[serde(default)]
+    pub from_apparatus: String,
+    #[serde(default)]
+    pub to_apparatus: String,
+    #[serde(default)]
+    pub map_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapRunRequest {
     #[serde(default)]
     pub map_id: String,
@@ -157,6 +183,8 @@ pub enum ProductionMapError {
     DuplicateNode(String),
     #[error("order number already belongs to another zakaz")]
     DuplicateOrderNumber,
+    #[error("order number cannot be changed")]
+    OrderNumberImmutable,
     #[error("edge references missing node: {0}")]
     MissingEdgeNode(String),
     #[error("map has a cycle")]
@@ -183,24 +211,57 @@ pub enum ProductionMapError {
     FormulaDivisionByZero,
     #[error("condition needs true and false branches")]
     MissingConditionBranch,
+    #[error("order is not allowed on the target apparatus")]
+    MoveNotAllowed,
     #[error("store failed")]
     StoreFailed,
+    #[error("queue action is not allowed")]
+    QueueActionNotAllowed,
+    #[error("previous production stage is not completed")]
+    PreviousStageNotCompleted,
+    #[error("apparatus is not assigned to this operator")]
+    ApparatusNotAssigned,
 }
 
 #[async_trait]
 pub trait ProductionMapStorePort: Send + Sync {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError>;
     async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError>;
+    async fn put_maps_batch(
+        &self,
+        maps: &[ProductionMapDefinition],
+    ) -> Result<(), ProductionMapError>;
+    async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError>;
+    async fn apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError>;
+    async fn put_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError>;
+    async fn apparatus_queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError>;
+    async fn put_apparatus_queue_states(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+    ) -> Result<(), ProductionMapError>;
 }
 
 pub struct MemoryProductionMapStore {
     maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
+    sequences: RwLock<BTreeMap<String, Vec<String>>>,
+    queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
             maps: RwLock::new(BTreeMap::new()),
+            sequences: RwLock::new(BTreeMap::new()),
+            queue_states: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -218,29 +279,239 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
     }
 
     async fn put_map(&self, map: ProductionMapDefinition) -> Result<(), ProductionMapError> {
-        self.maps.write().await.insert(map.id.clone(), map);
+        let mut maps = self.maps.write().await;
+        reject_order_number_immutable(&maps, &map)?;
+        let order_number = map.order_number.trim();
+        if !order_number.is_empty() {
+            let duplicate = maps.values().any(|existing| {
+                existing.order_number.trim() == order_number
+                    && existing.id.trim() != map.id.trim()
+            });
+            if duplicate {
+                return Err(ProductionMapError::DuplicateOrderNumber);
+            }
+        }
+        maps.insert(map.id.clone(), map);
         Ok(())
     }
+
+    async fn put_maps_batch(
+        &self,
+        maps: &[ProductionMapDefinition],
+    ) -> Result<(), ProductionMapError> {
+        let mut store = self.maps.write().await;
+        for map in maps {
+            reject_order_number_immutable(&store, map)?;
+            let order_number = map.order_number.trim();
+            if !order_number.is_empty() {
+                let duplicate = store.values().any(|existing| {
+                    existing.order_number.trim() == order_number
+                        && existing.id.trim() != map.id.trim()
+                });
+                if duplicate {
+                    return Err(ProductionMapError::DuplicateOrderNumber);
+                }
+            }
+        }
+        for map in maps {
+            store.insert(map.id.clone(), map.clone());
+        }
+        Ok(())
+    }
+
+    async fn delete_map(&self, map_id: &str) -> Result<(), ProductionMapError> {
+        self.maps.write().await.remove(map_id.trim());
+        Ok(())
+    }
+
+    async fn apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        Ok(self.sequences.read().await.clone())
+    }
+
+    async fn put_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        self.sequences
+            .write()
+            .await
+            .insert(apparatus.trim().to_string(), order_ids);
+        Ok(())
+    }
+
+    async fn apparatus_queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
+        Ok(self.queue_states.read().await.clone())
+    }
+
+    async fn put_apparatus_queue_states(
+        &self,
+        apparatus: &str,
+        states: BTreeMap<String, String>,
+    ) -> Result<(), ProductionMapError> {
+        self.queue_states
+            .write()
+            .await
+            .insert(apparatus.trim().to_string(), states);
+        Ok(())
+    }
+}
+
+const LIVE_NOTIFY_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductionMapLiveSnapshot {
+    pub maps: Vec<ProductionMapSaved>,
+    pub sequences: BTreeMap<String, Vec<String>>,
+    pub queue_states: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Clone)]
 pub struct ProductionMapService {
     store: std::sync::Arc<dyn ProductionMapStorePort>,
+    live_notify: broadcast::Sender<()>,
 }
 
 impl ProductionMapService {
     pub fn new(store: std::sync::Arc<dyn ProductionMapStorePort>) -> Self {
-        Self { store }
+        let (live_notify, _) = broadcast::channel(LIVE_NOTIFY_CAPACITY);
+        Self { store, live_notify }
+    }
+
+    pub fn subscribe_live(&self) -> broadcast::Receiver<()> {
+        self.live_notify.subscribe()
+    }
+
+    fn notify_live(&self) {
+        let _ = self.live_notify.send(());
+    }
+
+    pub async fn live_snapshot(&self) -> Result<ProductionMapLiveSnapshot, ProductionMapError> {
+        Ok(ProductionMapLiveSnapshot {
+            maps: self.maps().await?,
+            sequences: self.apparatus_sequences().await?,
+            queue_states: self.apparatus_queue_states().await?,
+        })
     }
 
     pub async fn maps(&self) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
         let maps = self.store.maps().await?;
         maps.into_iter()
-            .map(|map| {
+            .map(|mut map| {
+                // Legacy maps saved before `code` existed: expose the order
+                // number as the code so clients never need a fallback.
+                if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
+                    map.code = map.order_number.trim().to_string();
+                }
                 let program = compile_map(&map)?;
                 Ok(ProductionMapSaved { map, program })
             })
             .collect()
+    }
+
+    pub async fn apparatus_sequences(
+        &self,
+    ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
+        self.store.apparatus_sequences().await
+    }
+
+    pub async fn set_apparatus_sequence(
+        &self,
+        apparatus: &str,
+        order_ids: Vec<String>,
+    ) -> Result<(), ProductionMapError> {
+        let apparatus = apparatus.trim();
+        if apparatus.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        let order_ids = order_ids
+            .into_iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect();
+        self.store
+            .put_apparatus_sequence(apparatus, order_ids)
+            .await?;
+        self.notify_live();
+        Ok(())
+    }
+
+    pub async fn apparatus_queue_states(
+        &self,
+    ) -> Result<BTreeMap<String, BTreeMap<String, String>>, ProductionMapError> {
+        self.store.apparatus_queue_states().await
+    }
+
+    pub async fn apply_apparatus_queue_action(
+        &self,
+        apparatus: &str,
+        order_id: &str,
+        action: queue_state::ApparatusQueueAction,
+        assigned_apparatus: &[String],
+    ) -> Result<BTreeMap<String, String>, ProductionMapError> {
+        let apparatus = apparatus.trim();
+        if apparatus.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        if !queue_state::apparatus_matches_assigned(apparatus, assigned_apparatus) {
+            return Err(ProductionMapError::ApparatusNotAssigned);
+        }
+        let sequences = self.store.apparatus_sequences().await?;
+        let all_states = self.store.apparatus_queue_states().await?;
+        let known_keys = sequences
+            .keys()
+            .chain(all_states.keys())
+            .map(|key| key.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>();
+        let storage_key =
+            queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let stored_sequence = sequences
+            .get(&storage_key)
+            .cloned()
+            .unwrap_or_default();
+        let all_maps = self.store.maps().await?;
+        let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
+        let sequence =
+            queue_state::effective_apparatus_sequence(&stored_sequence, &visible_order_ids);
+        let order_map = all_maps
+            .iter()
+            .find(|map| map.id.trim() == order_id.trim())
+            .ok_or(ProductionMapError::MapNotFound)?;
+        if matches!(action, queue_state::ApparatusQueueAction::Start)
+            && !chain::order_ready_for_station(
+                order_map,
+                order_id,
+                apparatus,
+                &all_states,
+                &known_keys,
+            )
+        {
+            return Err(ProductionMapError::PreviousStageNotCompleted);
+        }
+        let states = all_states.get(&storage_key).cloned().unwrap_or_default();
+        let mut parsed = BTreeMap::new();
+        for (id, value) in states {
+            if let Some(state) = queue_state::ApparatusQueueOrderState::parse(&value) {
+                parsed.insert(id, state);
+            }
+        }
+        queue_state::apply_queue_action(&sequence, &mut parsed, order_id, action)?;
+        let saved = parsed
+            .into_iter()
+            .map(|(id, state)| (id, state.as_str().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        self.store
+            .put_apparatus_queue_states(&storage_key, saved.clone())
+            .await?;
+        self.notify_live();
+        Ok(saved)
     }
 
     pub async fn upsert_map(
@@ -250,7 +521,112 @@ impl ProductionMapService {
         normalize_map(&mut map);
         let program = compile_map(&map)?;
         self.store.put_map(map.clone()).await?;
+        self.notify_live();
         Ok(ProductionMapSaved { map, program })
+    }
+
+    pub async fn raw_map(
+        &self,
+        map_id: &str,
+    ) -> Result<Option<ProductionMapDefinition>, ProductionMapError> {
+        let map_id = map_id.trim().to_ascii_lowercase();
+        Ok(self
+            .store
+            .maps()
+            .await?
+            .into_iter()
+            .find(|map| map.id.trim() == map_id))
+    }
+
+    pub async fn restore_map(
+        &self,
+        previous: Option<&ProductionMapDefinition>,
+        map_id: &str,
+    ) -> Result<(), ProductionMapError> {
+        let result = match previous {
+            Some(map) => self.store.put_map(map.clone()).await,
+            None => self.store.delete_map(map_id).await,
+        };
+        if result.is_ok() {
+            self.notify_live();
+        }
+        result
+    }
+
+    /// Moves multiple orders atomically: either every move succeeds or none
+    /// are persisted.
+    pub async fn move_apparatus_batch(
+        &self,
+        input: ProductionMapBatchMoveRequest,
+    ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
+        let from = input.from_apparatus.trim();
+        let to = input.to_apparatus.trim();
+        if from.is_empty() || to.is_empty() || from == to {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        let map_ids: Vec<String> = input
+            .map_ids
+            .iter()
+            .map(|id| id.trim().to_ascii_lowercase())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if map_ids.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+
+        let maps = self.store.maps().await?;
+        let mut updated = Vec::with_capacity(map_ids.len());
+        for map_id in &map_ids {
+            let Some(map) = maps.iter().find(|item| item.id.trim() == map_id).cloned() else {
+                return Err(ProductionMapError::MapNotFound);
+            };
+            if !move_allowed(&map, from, to) {
+                return Err(ProductionMapError::MoveNotAllowed);
+            }
+            let mut next = map;
+            if !reassign_apparatus_nodes(&mut next, from, to) {
+                return Err(ProductionMapError::MoveNotAllowed);
+            }
+            updated.push(next);
+        }
+
+        self.store.put_maps_batch(&updated).await?;
+        self.notify_live();
+        updated
+            .into_iter()
+            .map(|map| {
+                let program = compile_map(&map)?;
+                Ok(ProductionMapSaved { map, program })
+            })
+            .collect()
+    }
+
+    /// Moves an order between apparatus, validating pechat rules server-side.
+    pub async fn move_apparatus(
+        &self,
+        input: ProductionMapMoveRequest,
+    ) -> Result<ProductionMapSaved, ProductionMapError> {
+        let map_id = input.map_id.trim().to_ascii_lowercase();
+        let from = input.from_apparatus.trim();
+        let to = input.to_apparatus.trim();
+        if map_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        if to.is_empty() || from == to {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        let maps = self.store.maps().await?;
+        let Some(map) = maps.into_iter().find(|map| map.id.trim() == map_id) else {
+            return Err(ProductionMapError::MapNotFound);
+        };
+        if !move_allowed(&map, from, to) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        let mut next = map;
+        if !reassign_apparatus_nodes(&mut next, from, to) {
+            return Err(ProductionMapError::MoveNotAllowed);
+        }
+        self.upsert_map(next).await
     }
 
     pub async fn run_map(
@@ -271,6 +647,50 @@ impl ProductionMapService {
         };
         run_map_with_variables(&map, input.order_qty, input.variables)
     }
+}
+
+fn visible_order_ids_for_apparatus(
+    maps: &[ProductionMapDefinition],
+    apparatus: &str,
+) -> Vec<String> {
+    maps.iter()
+        .filter(|map| chain::map_has_work_stage_for_station(map, apparatus))
+        .map(|map| map.id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
+    let Some(target_color) = pechat::pechat_color_count(to) else {
+        return true;
+    };
+    let source_color = pechat::pechat_color_count(from).or_else(|| {
+        pechat::order_pechat_color_count(
+            map.nodes
+                .iter()
+                .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+                .map(|node| node.title.as_str()),
+        )
+    });
+    pechat::pechat_can_move_order(target_color, map.roll_count, map.width_mm, source_color)
+}
+
+fn reassign_apparatus_nodes(
+    map: &mut ProductionMapDefinition,
+    from: &str,
+    to: &str,
+) -> bool {
+    let to = to.trim();
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && pechat::apparatus_node_matches_from(&node.title, from)
+        {
+            node.title = to.to_string();
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub fn compile_map(
@@ -297,10 +717,33 @@ pub fn compile_map(
     })
 }
 
+fn reject_order_number_immutable(
+    maps: &BTreeMap<String, ProductionMapDefinition>,
+    next: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
+    let id = next.id.trim();
+    if !id.starts_with("zakaz-") {
+        return Ok(());
+    }
+    let order_number = next.order_number.trim();
+    if order_number.is_empty() {
+        return Ok(());
+    }
+    let Some(existing) = maps.get(id) else {
+        return Ok(());
+    };
+    let existing_number = existing.order_number.trim();
+    if !existing_number.is_empty() && existing_number != order_number {
+        return Err(ProductionMapError::OrderNumberImmutable);
+    }
+    Ok(())
+}
+
 fn normalize_map(map: &mut ProductionMapDefinition) {
     map.id = map.id.trim().to_ascii_lowercase();
     map.product_code = map.product_code.trim().to_string();
     map.title = map.title.trim().to_string();
+    map.code = map.code.trim().to_string();
     map.order_number = map.order_number.trim().to_string();
     if map
         .roll_count
@@ -1185,6 +1628,7 @@ mod tests {
             id: "hotlunch-test".to_string(),
             product_code: "HOTLUNCH".to_string(),
             title: "Hotlunch test".to_string(),
+            code: String::new(),
             order_number: String::new(),
             roll_count: None,
             width_mm: None,
@@ -1270,6 +1714,7 @@ mod tests {
             id: "branch-test".to_string(),
             product_code: "HOTLUNCH".to_string(),
             title: "Branch test".to_string(),
+            code: String::new(),
             order_number: String::new(),
             roll_count: None,
             width_mm: None,

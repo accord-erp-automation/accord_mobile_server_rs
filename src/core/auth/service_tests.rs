@@ -241,6 +241,73 @@ async fn customer_login_accepts_local_erp_phone() {
 }
 
 #[tokio::test]
+async fn aparatchi_login_uses_forty_prefix() {
+    let customers = Arc::new(FakeCustomerLookup {
+        customers: vec![CustomerRecord {
+            id: "aparatchi - 4".to_string(),
+            name: "aparatchi".to_string(),
+            phone: "110000011".to_string(),
+        }],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "aparatchi - 4".to_string(),
+            AdminAccessState {
+                custom_code: "401122334455".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_customer_dependencies(customers, states);
+
+    let principal = auth
+        .login("110000011", "401122334455")
+        .await
+        .expect("aparatchi login");
+
+    assert_eq!(principal.role, PrincipalRole::Aparatchi);
+    assert_eq!(principal.ref_, "aparatchi - 4");
+}
+
+#[tokio::test]
+async fn customer_login_merges_local_phone_when_normalized_search_returns_other_matches() {
+    let customers = Arc::new(FakeCustomerLookup {
+        customers: vec![
+            CustomerRecord {
+                id: "aparatchi duplicate deploy check".to_string(),
+                name: "duplicate".to_string(),
+                phone: "+998110000011".to_string(),
+            },
+            CustomerRecord {
+                id: "aparatchi - 4".to_string(),
+                name: "aparatchi".to_string(),
+                phone: "110000011".to_string(),
+            },
+        ],
+    });
+    let states = Arc::new(FakeStateLookup {
+        states: BTreeMap::from([(
+            "aparatchi - 4".to_string(),
+            AdminAccessState {
+                custom_code: "401122334455".to_string(),
+                blocked: false,
+                removed: false,
+            },
+        )]),
+    });
+    let auth = AuthService::new(&config()).with_customer_dependencies(customers, states);
+
+    let principal = auth
+        .login("110000011", "401122334455")
+        .await
+        .expect("aparatchi login");
+
+    assert_eq!(principal.role, PrincipalRole::Aparatchi);
+    assert_eq!(principal.ref_, "aparatchi - 4");
+}
+
+#[tokio::test]
 async fn customer_login_fails_without_custom_code() {
     let customers = Arc::new(FakeCustomerLookup {
         customers: vec![CustomerRecord {

@@ -18,6 +18,9 @@ use crate::core::admin::ports::{
 use crate::core::admin::service::AdminService;
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort};
+use crate::core::calculate_orders::{
+    CalculateOrderError, CalculateOrderStorePort, CalculateOrderTemplate,
+};
 use crate::core::production_map::{MemoryProductionMapStore, ProductionMapService};
 use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
@@ -168,6 +171,577 @@ async fn admin_production_maps_save_compiles_program() {
         .expect("response");
     assert_eq!(list.status(), StatusCode::OK);
     assert_eq!(json_body(list).await[0]["map"]["product_code"], "HOTLUNCH");
+}
+
+#[tokio::test]
+async fn production_map_duplicate_order_number_returns_structured_error() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let first = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json("zakaz-1234", "Old zakaz", "1234", "8 ta rangli pechat"),
+        ))
+        .await
+        .expect("first save");
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let duplicate = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json("zakaz-new", "New zakaz", "1234", "8 ta rangli pechat"),
+        ))
+        .await
+        .expect("duplicate save");
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(duplicate).await["error"], "duplicate_order_number");
+}
+
+#[tokio::test]
+async fn production_map_move_validates_pechat_rules_on_server() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json(
+                "zakaz-9001",
+                "Nine color rubber order",
+                "9001",
+                "8 ta rangli pechat",
+            ),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(saved.status(), StatusCode::OK);
+
+    let blocked = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move",
+            &token,
+            r#"{
+                "map_id":"zakaz-9001",
+                "from_apparatus":"8 ta rangli pechat",
+                "to_apparatus":"7 ta rangli pechat"
+            }"#,
+        ))
+        .await
+        .expect("blocked move");
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(blocked).await["error"], "move_not_allowed");
+
+    let allowed = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move",
+            &token,
+            r#"{
+                "map_id":"zakaz-9001",
+                "from_apparatus":"8 ta rangli pechat",
+                "to_apparatus":"9 ta rangli pechat"
+            }"#,
+        ))
+        .await
+        .expect("allowed move");
+    assert_eq!(allowed.status(), StatusCode::OK);
+    let body = json_body(allowed).await;
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["saved"]["map"]["nodes"][1]["title"], "9 ta rangli pechat");
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    let maps = json_body(list).await;
+    assert_eq!(maps[0]["map"]["nodes"][1]["title"], "9 ta rangli pechat");
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_saves_map_and_template() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map_json = pechat_order_map_json(
+        "zakaz-7777",
+        "Atomic zakaz",
+        "7777",
+        "8 ta rangli pechat",
+    );
+    let body = format!(
+        r#"{{
+            "map":{map_json},
+            "template":{{
+                "name":"atomic mahsulot",
+                "product":"atomic mahsulot",
+                "width_mm":650,
+                "waste_percent":5,
+                "first_layer_material":"pet",
+                "first_layer_micron":"12",
+                "second_layer_material":"pe oq",
+                "second_layer_micron":"30"
+            }}
+        }}"#
+    );
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("save with order");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
+    assert_eq!(value["template"]["name"], "atomic mahsulot");
+    let template_id = value["template"]["id"]
+        .as_str()
+        .expect("template id")
+        .to_string();
+    assert!(!template_id.is_empty());
+    assert!(
+        value["template"]["code"]
+            .as_str()
+            .map(|code| !code.trim().is_empty())
+            .unwrap_or(false)
+    );
+
+    let cleanup_body = format!(r#"{{"id":"{template_id}"}}"#);
+    let cleanup = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/calculate/orders/delete",
+            &token,
+            &cleanup_body,
+        ))
+        .await
+        .expect("cleanup");
+    assert_eq!(cleanup.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn production_map_sequence_round_trips_on_server() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let put = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+            r#"{
+                "apparatus":"8 ta rangli pechat",
+                "order_ids":["zakaz-1111","zakaz-2222"," "]
+            }"#,
+        ))
+        .await
+        .expect("put sequence");
+    assert_eq!(put.status(), StatusCode::OK);
+
+    let get = build_router(state)
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps/sequence",
+            &token,
+        ))
+        .await
+        .expect("get sequence");
+    assert_eq!(get.status(), StatusCode::OK);
+    let body = json_body(get).await;
+    assert_eq!(
+        body["sequences"]["8 ta rangli pechat"],
+        serde_json::json!(["zakaz-1111", "zakaz-2222"])
+    );
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_rejects_invalid_template_before_saving_map() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map_json = pechat_order_map_json(
+        "zakaz-5555",
+        "Invalid template zakaz",
+        "5555",
+        "8 ta rangli pechat",
+    );
+    let body = format!(r#"{{"map":{map_json},"template":{{"name":"x","product":""}}}}"#);
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Map must not be saved when the template is invalid.
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    assert_eq!(
+        json_body(list).await.as_array().map(|maps| maps.len()),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn production_maps_list_falls_back_to_order_number_as_code() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json("zakaz-3333", "Legacy zakaz", "3333", "8 ta rangli pechat"),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(save.status(), StatusCode::OK);
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    let maps = json_body(list).await;
+    assert_eq!(maps[0]["map"]["code"], "3333");
+}
+
+#[tokio::test]
+async fn production_map_order_number_is_immutable_on_update() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json("zakaz-1234", "Locked zakaz", "1234", "Paket aparat"),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(save.status(), StatusCode::OK);
+
+    let changed = pechat_order_map_json("zakaz-1234", "Locked zakaz", "5678", "Paket aparat");
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &changed,
+        ))
+        .await
+        .expect("update");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(response).await["error"], "order_number_immutable");
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    let maps = json_body(list).await;
+    assert_eq!(maps[0]["map"]["order_number"], "1234");
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_rolls_back_map_when_template_store_fails() {
+    let state = test_state_with_failing_calculate();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map_json = pechat_order_map_json(
+        "zakaz-8888",
+        "Rollback zakaz",
+        "8888",
+        "Paket aparat",
+    );
+    let body = format!(
+        r#"{{"map":{map_json},"template":{{
+            "name":"rollback mahsulot",
+            "product":"rollback mahsulot",
+            "width_mm":650,
+            "waste_percent":5,
+            "first_layer_material":"pet",
+            "first_layer_micron":"12",
+            "second_layer_material":"pe oq",
+            "second_layer_micron":"30"
+        }}}}"#
+    );
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("with-order");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    assert_eq!(
+        json_body(list).await.as_array().map(|maps| maps.len()),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn production_map_batch_move_allows_seven_to_eight_color_pechat() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &pechat_order_map_json_with_dims(
+                "zakaz-3030",
+                "Dual pechat order",
+                "3030",
+                "7 ta rangli pechat - A",
+                7.0,
+                650.0,
+            ),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(save.status(), StatusCode::OK);
+
+    let moved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &token,
+            r#"{
+                "from_apparatus":"7 ta rangli pechat",
+                "to_apparatus":"8 ta rangli pechat",
+                "map_ids":["zakaz-3030"]
+            }"#,
+        ))
+        .await
+        .expect("batch move");
+    assert_eq!(moved.status(), StatusCode::OK);
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    let maps = json_body(list).await;
+    let apparatus = maps[0]["map"]["nodes"]
+        .as_array()
+        .and_then(|nodes| {
+            nodes.iter().find_map(|node| {
+                (node["kind"] == "apparatus").then(|| node["title"].as_str())
+            })
+        })
+        .flatten()
+        .unwrap_or("");
+    assert_eq!(apparatus, "8 ta rangli pechat");
+}
+
+#[tokio::test]
+async fn production_map_batch_move_is_all_or_nothing() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    for number in ["1010", "2020"] {
+        let save = build_router(state.clone())
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &token,
+                &pechat_order_map_json_with_dims(
+                    &format!("zakaz-{number}"),
+                    &format!("Batch {number}"),
+                    number,
+                    "7 ta rangli pechat",
+                    7.0,
+                    650.0,
+                ),
+            ))
+            .await
+            .expect("save");
+        assert_eq!(save.status(), StatusCode::OK);
+    }
+
+    let bad_batch = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &token,
+            r#"{
+                "from_apparatus":"7 ta rangli pechat",
+                "to_apparatus":"8 ta rangli pechat",
+                "map_ids":["zakaz-1010","zakaz-missing"]
+            }"#,
+        ))
+        .await
+        .expect("batch");
+    assert_eq!(bad_batch.status(), StatusCode::NOT_FOUND);
+
+    let verify = build_router(state.clone())
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("list");
+    for map in json_body(verify).await.as_array().expect("maps") {
+        let apparatus = map["map"]["nodes"]
+            .as_array()
+            .and_then(|nodes| {
+                nodes.iter().find_map(|node| {
+                    (node["kind"] == "apparatus").then(|| node["title"].as_str())
+                })
+            })
+            .flatten()
+            .unwrap_or("");
+        assert_eq!(apparatus, "7 ta rangli pechat");
+    }
+
+    let ok_batch = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &token,
+            r#"{
+                "from_apparatus":"7 ta rangli pechat",
+                "to_apparatus":"8 ta rangli pechat",
+                "map_ids":["zakaz-1010","zakaz-2020"]
+            }"#,
+        ))
+        .await
+        .expect("batch ok");
+    assert_eq!(ok_batch.status(), StatusCode::OK);
+    assert_eq!(json_body(ok_batch).await["saved"].as_array().map(|v| v.len()), Some(2));
+}
+
+#[tokio::test]
+async fn production_map_batch_move_stress_moves_many_orders_atomically() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    for index in 0..24 {
+        let number = format!("{index:04}");
+        let save = build_router(state.clone())
+            .oneshot(request_with_body(
+                "PUT",
+                "/v1/mobile/admin/production-maps",
+                &token,
+                &pechat_order_map_json_with_dims(
+                    &format!("zakaz-{number}"),
+                    &format!("Stress {number}"),
+                    &number,
+                    "7 ta rangli pechat",
+                    7.0,
+                    650.0,
+                ),
+            ))
+            .await
+            .expect("save");
+        assert_eq!(save.status(), StatusCode::OK);
+    }
+
+    let map_ids: Vec<String> = (0..24).map(|index| format!("\"zakaz-{index:04}\"")).collect();
+    let body = format!(
+        r#"{{"from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","map_ids":[{}]}}"#,
+        map_ids.join(",")
+    );
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("stress batch");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await["saved"].as_array().map(|v| v.len()),
+        Some(24)
+    );
+}
+
+struct FailCalculateUpsertStore;
+
+#[async_trait]
+impl CalculateOrderStorePort for FailCalculateUpsertStore {
+    async fn list(
+        &self,
+        _owner_key: &str,
+    ) -> Result<Vec<CalculateOrderTemplate>, CalculateOrderError> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert(
+        &self,
+        _owner_key: &str,
+        template: CalculateOrderTemplate,
+    ) -> Result<CalculateOrderTemplate, CalculateOrderError> {
+        let _ = template;
+        Err(CalculateOrderError::StoreFailed)
+    }
+
+    async fn delete(&self, _owner_key: &str, _id: &str) -> Result<(), CalculateOrderError> {
+        Ok(())
+    }
+}
+
+fn test_state_with_failing_calculate() -> AppState {
+    let mut state = test_state();
+    state.calculate_orders = Arc::new(FailCalculateUpsertStore);
+    state
+}
+
+fn pechat_order_map_json(id: &str, title: &str, order_number: &str, apparatus: &str) -> String {
+    pechat_order_map_json_with_dims(id, title, order_number, apparatus, 7.0, 1250.0)
+}
+
+fn pechat_order_map_json_with_dims(
+    id: &str,
+    title: &str,
+    order_number: &str,
+    apparatus: &str,
+    roll_count: f64,
+    width_mm: f64,
+) -> String {
+    format!(
+        r#"{{
+            "id":"{id}",
+            "product_code":"PECHAT-{order_number}",
+            "title":"{title}",
+            "order_number":"{order_number}",
+            "roll_count":{roll_count},
+            "width_mm":{width_mm},
+            "nodes":[
+                {{"id":"start","kind":"start","title":"Start"}},
+                {{"id":"apparatus","kind":"apparatus","title":"{apparatus}"}},
+                {{"id":"end","kind":"end","title":"End"}}
+            ],
+            "edges":[
+                {{"from":"start","to":"apparatus"}},
+                {{"from":"apparatus","to":"end"}}
+            ]
+        }}"#
+    )
 }
 
 #[tokio::test]

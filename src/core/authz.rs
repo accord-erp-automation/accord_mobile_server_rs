@@ -39,6 +39,7 @@ pub enum Capability {
     WerkaCodeManage,
     ProductionMapManage,
     ApparatusQueueRead,
+    ApparatusQueueManage,
     GscaleCatalogRead,
     GscalePrint,
     RpsBatchManage,
@@ -228,6 +229,9 @@ pub fn system_role_definitions() -> Vec<RoleDefinition> {
             capability_code(Capability::ApparatusQueueRead)
                 .unwrap_or("apparatus.queue.read")
                 .to_string(),
+            capability_code(Capability::ApparatusQueueManage)
+                .unwrap_or("apparatus.queue.manage")
+                .to_string(),
         ],
         base_role: None,
         system: true,
@@ -348,6 +352,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Supplier => "supplier",
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Admin => "admin",
     }
 }

@@ -7,6 +7,8 @@ pub struct CalculateOrderTemplate {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
+    pub code: String,
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub saved_at: String,

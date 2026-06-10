@@ -20,7 +20,7 @@ use crate::core::admin::ports::{
     AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
 };
 use crate::core::auth::access_codes::{SupplierAccessInput, supplier_access_code};
-use crate::core::auth::models::Principal;
+use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::auth::service::normalize_phone;
 use crate::core::authz::{
     Capability, MemoryRoleDefinitionStore, RoleAssignment, RoleAssignmentUpsert, RoleDefinition,

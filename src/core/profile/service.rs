@@ -54,7 +54,7 @@ impl ProfileService {
                     }
                 }
             }
-            PrincipalRole::Customer => {
+            PrincipalRole::Customer | PrincipalRole::Aparatchi => {
                 if let Ok(profile) = lookup.get_customer_profile(&principal.ref_).await {
                     principal.phone = profile.phone;
                 }
@@ -175,6 +175,7 @@ fn role_key(role: &PrincipalRole) -> &'static str {
         PrincipalRole::Supplier => "supplier",
         PrincipalRole::Werka => "werka",
         PrincipalRole::Customer => "customer",
+        PrincipalRole::Aparatchi => "aparatchi",
         PrincipalRole::Admin => "admin",
     }
 }
