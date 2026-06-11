@@ -1,5 +1,52 @@
 use super::*;
 
+pub async fn apparatus_groups(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AdminError> {
+    let principal = authorize_any_capability(
+        &state,
+        &headers,
+        &[Capability::AdminAccess, Capability::ProductionMapManage],
+    )
+    .await?;
+    if !matches!(method, Method::GET | Method::PUT) {
+        return Err(method_not_allowed());
+    }
+    match method {
+        Method::GET => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            state
+                .apparatus_groups
+                .groups()
+                .await
+                .map(json_response)
+                .map_err(apparatus_group_error)
+        }
+        Method::PUT => {
+            require_capability(&state, &principal, Capability::ProductionMapManage).await?;
+            let input: ApparatusGroupUpsert = parse_json(&body)?;
+            state
+                .apparatus_groups
+                .upsert_group(input)
+                .await
+                .map(json_response)
+                .map_err(apparatus_group_error)
+        }
+        _ => Err(method_not_allowed()),
+    }
+}
+
+fn apparatus_group_error(error: ApparatusGroupError) -> AdminError {
+    match error {
+        ApparatusGroupError::MissingName => bad_request("group name is required"),
+        ApparatusGroupError::MissingApparatus => bad_request("apparatus is required"),
+        ApparatusGroupError::StoreFailed => server_error("apparatus group store failed"),
+    }
+}
+
 pub async fn items_bulk_move_group(
     State(state): State<AppState>,
     method: Method,

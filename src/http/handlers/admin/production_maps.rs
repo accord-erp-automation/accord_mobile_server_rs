@@ -4,8 +4,8 @@ use crate::core::calculate_orders::{
     CalculateOrderError, CalculateOrderTemplate, owner_key, validate_template,
 };
 use crate::core::production_map::{
-    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError, ProductionMapMoveRequest, ProductionMapNode,
-    ProductionMapNodeKind, ProductionMapRunRequest, ProductionMapSaved, queue_state,
+    ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
+    ProductionMapMoveRequest, ProductionMapRunRequest, queue_state,
 };
 use async_stream::stream;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -19,7 +19,7 @@ pub async fn production_maps(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AdminError> {
-    let principal = authorize_any_capability(
+    authorize_any_capability(
         &state,
         &headers,
         &[

@@ -71,10 +71,7 @@ pub fn linear_work_stages(map: &ProductionMapDefinition) -> Vec<ChainStage> {
     stages
 }
 
-pub fn previous_work_stage_station(
-    map: &ProductionMapDefinition,
-    station: &str,
-) -> Option<String> {
+pub fn previous_work_stage_station(map: &ProductionMapDefinition, station: &str) -> Option<String> {
     let stages = linear_work_stages(map);
     let index = stages
         .iter()
@@ -100,13 +97,10 @@ pub fn order_ready_for_station(
         == ApparatusQueueOrderState::Completed
 }
 
-pub fn map_has_work_stage_for_station(
-    map: &ProductionMapDefinition,
-    station: &str,
-) -> bool {
-    linear_work_stages(map).iter().any(|stage| {
-        queue_state::apparatus_titles_match(&stage.station_title, station)
-    })
+pub fn map_has_work_stage_for_station(map: &ProductionMapDefinition, station: &str) -> bool {
+    linear_work_stages(map)
+        .iter()
+        .any(|stage| queue_state::apparatus_titles_match(&stage.station_title, station))
 }
 
 fn queue_state_for_station(
@@ -168,6 +162,9 @@ mod tests {
             qty_formula: String::new(),
             from_location: String::new(),
             to_location: String::new(),
+            alternative_group_id: String::new(),
+            alternative_group_label: String::new(),
+            alternative_assigned_title: String::new(),
             x: 0.0,
             y: 0.0,
         }
@@ -185,9 +182,17 @@ mod tests {
             nodes: vec![
                 node("start", ProductionMapNodeKind::Start, "Start"),
                 node("order", ProductionMapNodeKind::Task, "Hotlunch mahsulot"),
-                node("pechat", ProductionMapNodeKind::Apparatus, "9 ta rangli pechat - A"),
+                node(
+                    "pechat",
+                    ProductionMapNodeKind::Apparatus,
+                    "9 ta rangli pechat - A",
+                ),
                 node("lamin", ProductionMapNodeKind::Task, "Laminatsiya"),
-                node("rezka", ProductionMapNodeKind::Apparatus, "Rezka aparat - A"),
+                node(
+                    "rezka",
+                    ProductionMapNodeKind::Apparatus,
+                    "Rezka aparat - A",
+                ),
                 node("end", ProductionMapNodeKind::End, "End"),
             ],
             edges: vec![

@@ -9,8 +9,9 @@ pub use customers::{
     customer_list, customer_phone, customer_remove, customers, item_group_tree, item_groups, items,
 };
 pub use production_maps::{
-    production_map_live, production_map_move, production_map_move_batch, production_map_queue_action,
-    production_map_run, production_map_save_with_order, production_map_sequence, production_maps,
+    production_map_live, production_map_move, production_map_move_batch,
+    production_map_queue_action, production_map_run, production_map_save_with_order,
+    production_map_sequence, production_maps,
 };
 pub use supplier_mutations::{
     supplier_code_regenerate, supplier_item_add, supplier_item_remove, supplier_items,
@@ -20,10 +21,11 @@ pub use suppliers::{
     assigned_supplier_items, inactive_suppliers, settings, supplier_detail, supplier_list,
     supplier_summary, suppliers,
 };
-use system::{authorize_any_capability, authorize_capability, require_capability};
 pub use system::{
-    capabilities, items_bulk_move_group, role_assignments, roles, warehouses, werka_code_regenerate,
+    apparatus_groups, capabilities, items_bulk_move_group, role_assignments, roles, warehouses,
+    werka_code_regenerate,
 };
+use system::{authorize_any_capability, authorize_capability, require_capability};
 
 use axum::Json;
 use axum::body::Bytes;
@@ -43,6 +45,7 @@ use crate::core::admin::models::{
     AdminSuppliersPage,
 };
 use crate::core::admin::ports::AdminPortError;
+use crate::core::apparatus_groups::{ApparatusGroupError, ApparatusGroupUpsert};
 use crate::core::auth::models::Principal;
 use crate::core::authz::{
     Capability, RoleAssignmentUpsert, RoleDefinitionUpsert, capability_catalog_entries,

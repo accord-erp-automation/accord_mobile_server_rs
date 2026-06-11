@@ -4,6 +4,7 @@ use std::time::Duration;
 use crate::ai::werka_search::WerkaAiSearchService;
 use crate::config::{AppConfig, DotEnvPersister};
 use crate::core::admin::service::AdminService;
+use crate::core::apparatus_groups::ApparatusGroupService;
 use crate::core::auth::admin_read_lookup::AdminReadAuthLookup;
 use crate::core::auth::service::AuthService;
 use crate::core::calculate_orders::CalculateOrderStorePort;
@@ -26,6 +27,7 @@ use crate::erpnext::client::ErpnextClient;
 use crate::fcm::discover_push_sender;
 use crate::rps::RpsDriverClient;
 use crate::store::admin_state_store::AdminSupplierStateBackend;
+use crate::store::apparatus_group_store::ApparatusGroupStore;
 use crate::store::calculate_order_store::CalculateOrderStore;
 use crate::store::production_map_store::ProductionMapStore;
 use crate::store::profile_store::{LmdbProfileStore, ProfileStore};
@@ -46,6 +48,7 @@ pub struct AppState {
     pub customer: CustomerService,
     pub profiles: ProfileService,
     pub production_maps: ProductionMapService,
+    pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
@@ -67,6 +70,9 @@ impl AppState {
         let profile_store = build_profile_store(&config);
         let production_maps =
             ProductionMapService::new(Arc::new(ProductionMapStore::new(product_map_store_path())));
+        let apparatus_groups = ApparatusGroupService::new(Arc::new(ApparatusGroupStore::new(
+            apparatus_group_store_path(),
+        )));
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
@@ -256,6 +262,7 @@ impl AppState {
             customer,
             profiles,
             production_maps,
+            apparatus_groups,
             calculate_orders,
             calculate_order_image_dir,
             push,

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod apparatus_groups;
 pub mod auth;
 pub mod authz;
 pub mod calculate_orders;

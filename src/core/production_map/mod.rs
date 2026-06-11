@@ -45,6 +45,12 @@ pub struct ProductionMapNode {
     pub from_location: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub to_location: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alternative_group_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alternative_group_label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alternative_assigned_title: String,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
@@ -284,8 +290,7 @@ impl ProductionMapStorePort for MemoryProductionMapStore {
         let order_number = map.order_number.trim();
         if !order_number.is_empty() {
             let duplicate = maps.values().any(|existing| {
-                existing.order_number.trim() == order_number
-                    && existing.id.trim() != map.id.trim()
+                existing.order_number.trim() == order_number && existing.id.trim() != map.id.trim()
             });
             if duplicate {
                 return Err(ProductionMapError::DuplicateOrderNumber);
@@ -470,12 +475,8 @@ impl ProductionMapService {
             .into_iter()
             .map(|key| key.to_string())
             .collect::<Vec<_>>();
-        let storage_key =
-            queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
-        let stored_sequence = sequences
-            .get(&storage_key)
-            .cloned()
-            .unwrap_or_default();
+        let storage_key = queue_state::resolve_apparatus_storage_key(apparatus, &known_keys);
+        let stored_sequence = sequences.get(&storage_key).cloned().unwrap_or_default();
         let all_maps = self.store.maps().await?;
         let visible_order_ids = visible_order_ids_for_apparatus(&all_maps, apparatus);
         let sequence =
@@ -675,11 +676,7 @@ fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
     pechat::pechat_can_move_order(target_color, map.roll_count, map.width_mm, source_color)
 }
 
-fn reassign_apparatus_nodes(
-    map: &mut ProductionMapDefinition,
-    from: &str,
-    to: &str,
-) -> bool {
+fn reassign_apparatus_nodes(map: &mut ProductionMapDefinition, from: &str, to: &str) -> bool {
     let to = to.trim();
     let mut changed = false;
     for node in &mut map.nodes {
@@ -765,6 +762,9 @@ fn normalize_map(map: &mut ProductionMapDefinition) {
         node.qty_formula = node.qty_formula.trim().to_string();
         node.from_location = node.from_location.trim().to_string();
         node.to_location = node.to_location.trim().to_string();
+        node.alternative_group_id = node.alternative_group_id.trim().to_string();
+        node.alternative_group_label = node.alternative_group_label.trim().to_string();
+        node.alternative_assigned_title = node.alternative_assigned_title.trim().to_string();
         if !node.x.is_finite() {
             node.x = 0.0;
         }
@@ -1416,6 +1416,24 @@ fn compile_node(
     if !node.to_location.is_empty() {
         args.insert("to_location".to_string(), node.to_location.clone());
     }
+    if !node.alternative_group_id.is_empty() {
+        args.insert(
+            "alternative_group_id".to_string(),
+            node.alternative_group_id.clone(),
+        );
+    }
+    if !node.alternative_group_label.is_empty() {
+        args.insert(
+            "alternative_group_label".to_string(),
+            node.alternative_group_label.clone(),
+        );
+    }
+    if !node.alternative_assigned_title.is_empty() {
+        args.insert(
+            "alternative_assigned_title".to_string(),
+            node.alternative_assigned_title.clone(),
+        );
+    }
     let op_code = match node.kind {
         ProductionMapNodeKind::Start => "start",
         ProductionMapNodeKind::Location => "warehouse_location",
@@ -1487,6 +1505,9 @@ mod tests {
                 qty_formula: String::new(),
                 from_location: String::new(),
                 to_location: String::new(),
+                alternative_group_id: String::new(),
+                alternative_group_label: String::new(),
+                alternative_assigned_title: String::new(),
                 x: 0.0,
                 y: 0.0,
             },
@@ -1643,6 +1664,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1659,6 +1683,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1672,6 +1699,9 @@ mod tests {
                     qty_formula: "cpp_kg".to_string(),
                     from_location: "CPP ombor".to_string(),
                     to_location: "Rezka apparat".to_string(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1685,6 +1715,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1729,6 +1762,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1745,6 +1781,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1758,6 +1797,9 @@ mod tests {
                     qty_formula: "order_qty / 6".to_string(),
                     from_location: "CPP ombor".to_string(),
                     to_location: "Rezka apparat".to_string(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1771,6 +1813,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },
@@ -1784,6 +1829,9 @@ mod tests {
                     qty_formula: String::new(),
                     from_location: String::new(),
                     to_location: String::new(),
+                    alternative_group_id: String::new(),
+                    alternative_group_label: String::new(),
+                    alternative_assigned_title: String::new(),
                     x: 0.0,
                     y: 0.0,
                 },

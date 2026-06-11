@@ -132,6 +132,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/mobile/werka/suppliers", any(werka::suppliers))
         .route("/v1/mobile/werka/home", any(werka::home))
         .route("/v1/mobile/admin/settings", any(admin::settings))
+        .route(
+            "/v1/mobile/admin/apparatus-groups",
+            any(admin::apparatus_groups),
+        )
         .route("/v1/mobile/admin/capabilities", any(admin::capabilities))
         .route("/v1/mobile/admin/roles", any(admin::roles))
         .route(

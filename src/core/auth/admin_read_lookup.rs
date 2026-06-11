@@ -114,9 +114,7 @@ mod tests {
                 .customers
                 .iter()
                 .filter(|entry| {
-                    query.is_empty()
-                        || entry.ref_.contains(query)
-                        || entry.phone.contains(query)
+                    query.is_empty() || entry.ref_.contains(query) || entry.phone.contains(query)
                 })
                 .take(limit.max(1))
                 .cloned()

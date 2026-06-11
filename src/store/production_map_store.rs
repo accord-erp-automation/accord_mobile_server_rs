@@ -182,8 +182,7 @@ impl ProductionMapStorePort for ProductionMapStore {
             .map_err(|_| ProductionMapError::StoreFailed)?;
         let mut grouped = BTreeMap::<String, BTreeMap<String, String>>::new();
         for row in rows {
-            let (apparatus, order_id, state) =
-                row.map_err(|_| ProductionMapError::StoreFailed)?;
+            let (apparatus, order_id, state) = row.map_err(|_| ProductionMapError::StoreFailed)?;
             grouped
                 .entry(apparatus)
                 .or_default()
@@ -211,7 +210,12 @@ impl ProductionMapStorePort for ProductionMapStore {
             conn.execute(
                 "INSERT INTO apparatus_queue_states (apparatus, order_id, state, saved_at)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![apparatus, order_id.trim(), state.trim(), unix_micros().to_string()],
+                params![
+                    apparatus,
+                    order_id.trim(),
+                    state.trim(),
+                    unix_micros().to_string()
+                ],
             )
             .map_err(|_| ProductionMapError::StoreFailed)?;
         }
@@ -219,7 +223,10 @@ impl ProductionMapStorePort for ProductionMapStore {
     }
 }
 
-fn put_map_inner(conn: &Connection, map: &ProductionMapDefinition) -> Result<(), ProductionMapError> {
+fn put_map_inner(
+    conn: &Connection,
+    map: &ProductionMapDefinition,
+) -> Result<(), ProductionMapError> {
     let payload = serde_json::to_string(map).map_err(|_| ProductionMapError::StoreFailed)?;
     conn.execute(
         "INSERT INTO production_maps
@@ -380,6 +387,9 @@ mod tests {
                         qty_formula: String::new(),
                         from_location: String::new(),
                         to_location: String::new(),
+                        alternative_group_id: String::new(),
+                        alternative_group_label: String::new(),
+                        alternative_assigned_title: String::new(),
                         x: 0.0,
                         y: 0.0,
                     },
@@ -393,6 +403,9 @@ mod tests {
                         qty_formula: String::new(),
                         from_location: String::new(),
                         to_location: String::new(),
+                        alternative_group_id: String::new(),
+                        alternative_group_label: String::new(),
+                        alternative_assigned_title: String::new(),
                         x: 0.0,
                         y: 132.0,
                     },
@@ -406,6 +419,9 @@ mod tests {
                         qty_formula: String::new(),
                         from_location: String::new(),
                         to_location: String::new(),
+                        alternative_group_id: String::new(),
+                        alternative_group_label: String::new(),
+                        alternative_assigned_title: String::new(),
                         x: 0.0,
                         y: 264.0,
                     },

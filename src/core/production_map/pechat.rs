@@ -53,7 +53,10 @@ fn color_count_before(bytes: &[u8], rangli_start: usize) -> Option<u8> {
 
 /// Minimal pechat color count required by the order, or `None` when the
 /// order data does not constrain the pechat (or exceeds all pechats).
-pub fn recommended_pechat_color_count(roll_count: Option<f64>, width_mm: Option<f64>) -> Option<u8> {
+pub fn recommended_pechat_color_count(
+    roll_count: Option<f64>,
+    width_mm: Option<f64>,
+) -> Option<u8> {
     let roll = roll_count.filter(|value| *value > 0.0);
     let width = width_mm.filter(|value| *value > 0.0);
     if roll.is_none() && width.is_none() {
@@ -115,10 +118,7 @@ pub fn pechat_can_handle_order(
 
 /// Highest pechat color count among the order's apparatus titles.
 pub fn order_pechat_color_count<'a>(titles: impl IntoIterator<Item = &'a str>) -> Option<u8> {
-    titles
-        .into_iter()
-        .filter_map(pechat_color_count)
-        .max()
+    titles.into_iter().filter_map(pechat_color_count).max()
 }
 
 /// Whether an apparatus node belongs to the source warehouse/pechat being moved

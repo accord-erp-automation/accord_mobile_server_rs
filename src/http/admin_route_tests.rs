@@ -16,6 +16,7 @@ use crate::core::admin::ports::{
     AdminCredentialPort, AdminPortError, AdminReadPort, AdminStatePort, AdminWritePort,
 };
 use crate::core::admin::service::AdminService;
+use crate::core::apparatus_groups::{ApparatusGroupService, MemoryApparatusGroupStore};
 use crate::core::auth::models::{Principal, PrincipalRole};
 use crate::core::authz::{MemoryRoleDefinitionStore, RoleDefinition, RoleDefinitionStorePort};
 use crate::core::calculate_orders::{
@@ -174,6 +175,76 @@ async fn admin_production_maps_save_compiles_program() {
 }
 
 #[tokio::test]
+async fn production_map_nodes_preserve_alternative_group_metadata() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            r#"{
+                "id":"zakaz-alt",
+                "product_code":"ALT-001",
+                "title":"Alternative order",
+                "nodes":[
+                    {"id":"start","kind":"start","title":"Start"},
+                    {
+                        "id":"apparatus",
+                        "kind":"apparatus",
+                        "title":"7 ta rangli pechat",
+                        "alternative_group_id":"alt-pechat-1",
+                        "alternative_group_label":"pechat",
+                        "alternative_assigned_title":"7 ta rangli pechat"
+                    },
+                    {"id":"end","kind":"end","title":"End"}
+                ],
+                "edges":[
+                    {"from":"start","to":"apparatus"},
+                    {"from":"apparatus","to":"end"}
+                ]
+            }"#,
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = json_body(response).await;
+    assert_eq!(
+        value["map"]["nodes"][1]["alternative_group_id"],
+        "alt-pechat-1"
+    );
+    assert_eq!(
+        value["map"]["nodes"][1]["alternative_group_label"],
+        "pechat"
+    );
+    assert_eq!(
+        value["map"]["nodes"][1]["alternative_assigned_title"],
+        "7 ta rangli pechat"
+    );
+
+    let list = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
+        .await
+        .expect("response");
+    assert_eq!(list.status(), StatusCode::OK);
+    let listed = json_body(list).await;
+    assert_eq!(
+        listed[0]["map"]["nodes"][1]["alternative_group_id"],
+        "alt-pechat-1"
+    );
+    assert_eq!(
+        listed[0]["map"]["nodes"][1]["alternative_group_label"],
+        "pechat"
+    );
+    assert_eq!(
+        listed[0]["map"]["nodes"][1]["alternative_assigned_title"],
+        "7 ta rangli pechat"
+    );
+}
+
+#[tokio::test]
 async fn production_map_duplicate_order_number_returns_structured_error() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -199,7 +270,10 @@ async fn production_map_duplicate_order_number_returns_structured_error() {
         .await
         .expect("duplicate save");
     assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(json_body(duplicate).await["error"], "duplicate_order_number");
+    assert_eq!(
+        json_body(duplicate).await["error"],
+        "duplicate_order_number"
+    );
 }
 
 #[tokio::test]
@@ -255,7 +329,10 @@ async fn production_map_move_validates_pechat_rules_on_server() {
     assert_eq!(allowed.status(), StatusCode::OK);
     let body = json_body(allowed).await;
     assert_eq!(body["ok"], true);
-    assert_eq!(body["saved"]["map"]["nodes"][1]["title"], "9 ta rangli pechat");
+    assert_eq!(
+        body["saved"]["map"]["nodes"][1]["title"],
+        "9 ta rangli pechat"
+    );
 
     let list = build_router(state)
         .oneshot(request("GET", "/v1/mobile/admin/production-maps", &token))
@@ -270,12 +347,8 @@ async fn production_map_save_with_order_saves_map_and_template() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json(
-        "zakaz-7777",
-        "Atomic zakaz",
-        "7777",
-        "8 ta rangli pechat",
-    );
+    let map_json =
+        pechat_order_map_json("zakaz-7777", "Atomic zakaz", "7777", "8 ta rangli pechat");
     let body = format!(
         r#"{{
             "map":{map_json},
@@ -465,12 +538,7 @@ async fn production_map_save_with_order_rolls_back_map_when_template_store_fails
     let state = test_state_with_failing_calculate();
     let token = session(&state, PrincipalRole::Admin).await;
 
-    let map_json = pechat_order_map_json(
-        "zakaz-8888",
-        "Rollback zakaz",
-        "8888",
-        "Paket aparat",
-    );
+    let map_json = pechat_order_map_json("zakaz-8888", "Rollback zakaz", "8888", "Paket aparat");
     let body = format!(
         r#"{{"map":{map_json},"template":{{
             "name":"rollback mahsulot",
@@ -550,9 +618,9 @@ async fn production_map_batch_move_allows_seven_to_eight_color_pechat() {
     let apparatus = maps[0]["map"]["nodes"]
         .as_array()
         .and_then(|nodes| {
-            nodes.iter().find_map(|node| {
-                (node["kind"] == "apparatus").then(|| node["title"].as_str())
-            })
+            nodes
+                .iter()
+                .find_map(|node| (node["kind"] == "apparatus").then(|| node["title"].as_str()))
         })
         .flatten()
         .unwrap_or("");
@@ -607,9 +675,9 @@ async fn production_map_batch_move_is_all_or_nothing() {
         let apparatus = map["map"]["nodes"]
             .as_array()
             .and_then(|nodes| {
-                nodes.iter().find_map(|node| {
-                    (node["kind"] == "apparatus").then(|| node["title"].as_str())
-                })
+                nodes
+                    .iter()
+                    .find_map(|node| (node["kind"] == "apparatus").then(|| node["title"].as_str()))
             })
             .flatten()
             .unwrap_or("");
@@ -630,7 +698,12 @@ async fn production_map_batch_move_is_all_or_nothing() {
         .await
         .expect("batch ok");
     assert_eq!(ok_batch.status(), StatusCode::OK);
-    assert_eq!(json_body(ok_batch).await["saved"].as_array().map(|v| v.len()), Some(2));
+    assert_eq!(
+        json_body(ok_batch).await["saved"]
+            .as_array()
+            .map(|v| v.len()),
+        Some(2)
+    );
 }
 
 #[tokio::test]
@@ -659,7 +732,9 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
         assert_eq!(save.status(), StatusCode::OK);
     }
 
-    let map_ids: Vec<String> = (0..24).map(|index| format!("\"zakaz-{index:04}\"")).collect();
+    let map_ids: Vec<String> = (0..24)
+        .map(|index| format!("\"zakaz-{index:04}\""))
+        .collect();
     let body = format!(
         r#"{{"from_apparatus":"7 ta rangli pechat","to_apparatus":"8 ta rangli pechat","map_ids":[{}]}}"#,
         map_ids.join(",")
@@ -675,7 +750,9 @@ async fn production_map_batch_move_stress_moves_many_orders_atomically() {
         .expect("stress batch");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        json_body(response).await["saved"].as_array().map(|v| v.len()),
+        json_body(response).await["saved"]
+            .as_array()
+            .map(|v| v.len()),
         Some(24)
     );
 }
@@ -1664,6 +1741,41 @@ async fn admin_warehouses_filters_by_parent() {
 }
 
 #[tokio::test]
+async fn admin_apparatus_groups_round_trip_on_server() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let saved = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/apparatus-groups",
+            &token,
+            r#"{"name":" pechat ","apparatus":[" 7 ta rangli pechat ","8 ta rangli pechat","7 ta rangli pechat"]}"#,
+        ))
+        .await
+        .expect("response");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let saved_body = json_body(saved).await;
+    assert_eq!(saved_body["name"], "pechat");
+    assert_eq!(
+        saved_body["apparatus"],
+        serde_json::json!(["7 ta rangli pechat", "8 ta rangli pechat"])
+    );
+
+    let listed = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/admin/apparatus-groups", &token))
+        .await
+        .expect("response");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed_body = json_body(listed).await;
+    assert_eq!(listed_body[0]["name"], "pechat");
+    assert_eq!(
+        listed_body[0]["apparatus"],
+        serde_json::json!(["7 ta rangli pechat", "8 ta rangli pechat"])
+    );
+}
+
+#[tokio::test]
 async fn admin_item_group_tree_returns_parent_shape() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -2199,6 +2311,7 @@ fn test_state() -> AppState {
         .with_write_port(erp)
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
+    state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
     state
 }
 

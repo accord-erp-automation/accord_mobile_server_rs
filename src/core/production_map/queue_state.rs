@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::pechat;
 use super::ProductionMapError;
+use super::pechat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +44,9 @@ pub fn apparatus_matches_assigned(apparatus: &str, assigned: &[String]) -> bool 
     if apparatus.is_empty() {
         return false;
     }
-    assigned.iter().any(|item| apparatus_titles_match(apparatus, item.trim()))
+    assigned
+        .iter()
+        .any(|item| apparatus_titles_match(apparatus, item.trim()))
 }
 
 pub fn apparatus_titles_match(left: &str, right: &str) -> bool {
@@ -149,7 +151,11 @@ pub fn first_actionable_order_id(
         if id.is_empty() {
             continue;
         }
-        match states.get(id).copied().unwrap_or(ApparatusQueueOrderState::Pending) {
+        match states
+            .get(id)
+            .copied()
+            .unwrap_or(ApparatusQueueOrderState::Pending)
+        {
             ApparatusQueueOrderState::Completed => continue,
             ApparatusQueueOrderState::Pending | ApparatusQueueOrderState::InProgress => {
                 return Some(id.to_string());
@@ -217,10 +223,7 @@ mod tests {
     #[test]
     fn effective_sequence_uses_visible_order_when_store_empty() {
         let visible = vec!["zakaz-1236".to_string(), "zakaz-6687".to_string()];
-        assert_eq!(
-            effective_apparatus_sequence(&[], &visible),
-            visible,
-        );
+        assert_eq!(effective_apparatus_sequence(&[], &visible), visible,);
     }
 
     #[test]
@@ -231,10 +234,7 @@ mod tests {
             "zakaz-6687".to_string(),
         ];
         let visible = vec!["zakaz-1236".to_string(), "zakaz-6687".to_string()];
-        assert_eq!(
-            effective_apparatus_sequence(&stored, &visible),
-            visible,
-        );
+        assert_eq!(effective_apparatus_sequence(&stored, &visible), visible,);
     }
 
     #[test]
@@ -245,10 +245,7 @@ mod tests {
             .expect_err("only first pending order");
         apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Start)
             .expect("start first");
-        assert_eq!(
-            states.get("a"),
-            Some(&ApparatusQueueOrderState::InProgress)
-        );
+        assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::InProgress));
         apply_queue_action(&sequence, &mut states, "a", ApparatusQueueAction::Complete)
             .expect("complete first");
         assert_eq!(states.get("a"), Some(&ApparatusQueueOrderState::Completed));
