@@ -716,23 +716,10 @@ fn reassign_alternative_apparatus_assignment(
     if candidate_groups.is_empty() {
         return false;
     }
-    let target_groups: BTreeSet<String> = candidate_groups
-        .into_iter()
-        .filter(|group_id| {
-            map.nodes.iter().any(|node| {
-                node.kind == ProductionMapNodeKind::Apparatus
-                    && node.alternative_group_id.trim() == group_id
-                    && queue_state::apparatus_titles_match(&node.title, to)
-            })
-        })
-        .collect();
-    if target_groups.is_empty() {
-        return false;
-    }
     let mut changed = false;
     for node in &mut map.nodes {
         if node.kind == ProductionMapNodeKind::Apparatus
-            && target_groups.contains(node.alternative_group_id.trim())
+            && candidate_groups.contains(node.alternative_group_id.trim())
         {
             node.alternative_assigned_title = to.to_string();
             changed = true;
