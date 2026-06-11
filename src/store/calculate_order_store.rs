@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -65,6 +66,7 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             })
             .map_err(|_| CalculateOrderError::StoreFailed)?;
         rows.collect::<Result<Vec<_>, _>>()
+            .map(dedupe_templates)
             .map_err(|_| CalculateOrderError::StoreFailed)
     }
 
@@ -137,6 +139,7 @@ fn existing_id_by_code(
         "SELECT id
          FROM calculate_order_templates
          WHERE owner_key = ?1 AND lower_code = ?2
+         ORDER BY saved_at DESC
          LIMIT 1",
         params![owner_key.trim(), normalize_key(code)],
         |row| row.get(0),
@@ -203,7 +206,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
             ON calculate_order_templates(owner_key, lower_name);",
     )?;
-    ensure_code_columns(conn)
+    ensure_code_columns(conn)?;
+    rebuild_with_code_unique(conn)
 }
 
 fn ensure_code_columns(conn: &Connection) -> rusqlite::Result<()> {
@@ -230,6 +234,50 @@ fn ensure_code_columns(conn: &Connection) -> rusqlite::Result<()> {
     )?;
 
     rebuild_without_name_unique(conn)
+}
+
+fn rebuild_with_code_unique(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS calculate_order_templates_next;
+        CREATE TABLE calculate_order_templates_next (
+            id TEXT PRIMARY KEY,
+            owner_key TEXT NOT NULL,
+            code TEXT NOT NULL,
+            lower_code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            lower_name TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            UNIQUE(owner_key, lower_code)
+        );
+        INSERT OR IGNORE INTO calculate_order_templates_next
+            (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
+        SELECT
+            id,
+            owner_key,
+            CASE
+                WHEN trim(code) != '' THEN trim(code)
+                ELSE 'Z-' || id
+            END,
+            lower(
+                CASE
+                    WHEN trim(code) != '' THEN trim(code)
+                    ELSE 'Z-' || id
+                END
+            ),
+            name,
+            lower_name,
+            saved_at,
+            payload_json
+        FROM calculate_order_templates
+        ORDER BY saved_at DESC, id DESC;
+        DROP TABLE calculate_order_templates;
+        ALTER TABLE calculate_order_templates_next RENAME TO calculate_order_templates;
+        CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_saved
+            ON calculate_order_templates(owner_key, saved_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
+            ON calculate_order_templates(owner_key, lower_name);",
+    )
 }
 
 fn rebuild_without_name_unique(conn: &Connection) -> rusqlite::Result<()> {
@@ -285,6 +333,23 @@ fn rebuild_without_name_unique(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_calculate_order_templates_owner_name
             ON calculate_order_templates(owner_key, lower_name);",
     )
+}
+
+fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrderTemplate> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::with_capacity(templates.len());
+    for template in templates {
+        let code = normalize_key(&template.code);
+        let key = if code.is_empty() {
+            format!("id:{}", template.id.trim())
+        } else {
+            format!("code:{code}")
+        };
+        if key == "id:" || seen.insert(key) {
+            result.push(template);
+        }
+    }
+    result
 }
 
 fn normalize_key(value: &str) -> String {
@@ -453,5 +518,97 @@ mod tests {
         assert_eq!(updated.id, second.id);
         assert_eq!(updated.width_mm, 640.0);
         assert_eq!(store.list("admin:admin").await.expect("list").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn calculate_order_sqlite_store_dedupes_legacy_same_code_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("orders.sqlite");
+        let conn = Connection::open(&path).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE calculate_order_templates (
+                id TEXT PRIMARY KEY,
+                owner_key TEXT NOT NULL,
+                code TEXT NOT NULL,
+                lower_code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                lower_name TEXT NOT NULL,
+                saved_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );",
+        )
+        .expect("legacy schema");
+
+        let old = CalculateOrderTemplate {
+            id: "old-id".to_string(),
+            code: "Z-DUP-1".to_string(),
+            name: "Old duplicate".to_string(),
+            saved_at: "100".to_string(),
+            order_number: String::new(),
+            customer_ref: String::new(),
+            customer: String::new(),
+            item_code: "ITEM-001".to_string(),
+            product: "Qurt".to_string(),
+            status: String::new(),
+            material_display: String::new(),
+            color: String::new(),
+            image_id: String::new(),
+            image_name: String::new(),
+            image_mime: String::new(),
+            image_size_bytes: 0,
+            image_url: String::new(),
+            width_mm: 530.0,
+            waste_percent: 5.0,
+            roll_count: Some(7.0),
+            first_layer_material: "pet".to_string(),
+            first_layer_micron: "12".to_string(),
+            second_layer_material: "pe oq".to_string(),
+            second_layer_micron: "30".to_string(),
+            third_layer_material: String::new(),
+            third_layer_micron: String::new(),
+            note: String::new(),
+        };
+        let newer = CalculateOrderTemplate {
+            id: "new-id".to_string(),
+            name: "New duplicate".to_string(),
+            saved_at: "200".to_string(),
+            width_mm: 640.0,
+            ..old.clone()
+        };
+        for template in [&old, &newer] {
+            conn.execute(
+                "INSERT INTO calculate_order_templates
+                    (id, owner_key, code, lower_code, name, lower_name, saved_at, payload_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    template.id,
+                    "admin:admin",
+                    template.code,
+                    template.code.to_lowercase(),
+                    template.name,
+                    template.name.to_lowercase(),
+                    template.saved_at,
+                    serde_json::to_string(template).expect("json"),
+                ],
+            )
+            .expect("insert duplicate");
+        }
+        drop(conn);
+
+        let store = CalculateOrderStore::new(path.clone());
+        let rows = store.list("admin:admin").await.expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "new-id");
+        assert_eq!(rows[0].width_mm, 640.0);
+
+        let conn = Connection::open(path).expect("reopen sqlite");
+        let row_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM calculate_order_templates",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row count");
+        assert_eq!(row_count, 1);
     }
 }
