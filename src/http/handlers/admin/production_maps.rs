@@ -376,6 +376,9 @@ fn production_map_error(error: ProductionMapError) -> AdminError {
             bad_request("previous_stage_not_completed")
         }
         ProductionMapError::ApparatusNotAssigned => bad_request("apparatus_not_assigned"),
+        ProductionMapError::LaminatsiyaRubberTooLarge => {
+            bad_request("laminatsiya_rubber_too_large")
+        }
         ProductionMapError::MapNotFound => not_found("map_not_found"),
         ProductionMapError::StoreFailed => server_error("store failed"),
         other => bad_request(other.to_string()),

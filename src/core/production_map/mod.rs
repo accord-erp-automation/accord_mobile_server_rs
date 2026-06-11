@@ -9,6 +9,8 @@ pub mod chain;
 pub mod pechat;
 pub mod queue_state;
 
+const MAX_LAMINATSIYA_RUBBER_SIZE_MM: i64 = 1050;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionMapDefinition {
     pub id: String,
@@ -227,6 +229,8 @@ pub enum ProductionMapError {
     PreviousStageNotCompleted,
     #[error("apparatus is not assigned to this operator")]
     ApparatusNotAssigned,
+    #[error("laminatsiya is not allowed when rubber size is above 1050")]
+    LaminatsiyaRubberTooLarge,
 }
 
 #[async_trait]
@@ -831,6 +835,9 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
     if map.title.trim().is_empty() {
         return Err(ProductionMapError::MissingTitle);
     }
+    if laminatsiya_rubber_too_large(map) {
+        return Err(ProductionMapError::LaminatsiyaRubberTooLarge);
+    }
 
     let mut ids = BTreeSet::new();
     let mut start_count = 0;
@@ -911,6 +918,25 @@ fn validate_map(map: &ProductionMapDefinition) -> Result<(), ProductionMapError>
         }
     }
     Ok(())
+}
+
+fn laminatsiya_rubber_too_large(map: &ProductionMapDefinition) -> bool {
+    let Some(width_mm) = map.width_mm.filter(|value| *value > 0.0) else {
+        return false;
+    };
+    if pechat::rubber_size_from_width(width_mm) <= MAX_LAMINATSIYA_RUBBER_SIZE_MM {
+        return false;
+    }
+    map.nodes.iter().any(|node| {
+        matches!(
+            node.kind,
+            ProductionMapNodeKind::Apparatus | ProductionMapNodeKind::Task
+        ) && is_laminatsiya_title(&node.title)
+    })
+}
+
+fn is_laminatsiya_title(title: &str) -> bool {
+    title.trim().to_lowercase().contains("laminatsiya")
 }
 
 fn validate_formula_target(target: &str) -> Result<(), ProductionMapError> {

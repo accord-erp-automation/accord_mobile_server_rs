@@ -277,6 +277,46 @@ async fn production_map_duplicate_order_number_returns_structured_error() {
 }
 
 #[tokio::test]
+async fn production_map_rejects_laminatsiya_when_rubber_above_1050() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &laminatsiya_order_map_json("zakaz-lamin-1051", 1051.0),
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(response).await["error"],
+        "laminatsiya_rubber_too_large"
+    );
+}
+
+#[tokio::test]
+async fn production_map_allows_laminatsiya_at_1050_rubber() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &laminatsiya_order_map_json("zakaz-lamin-1050", 1050.0),
+        ))
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn production_map_move_validates_pechat_rules_on_server() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -998,6 +1038,28 @@ fn pechat_order_map_json_with_dims(
             "edges":[
                 {{"from":"start","to":"apparatus"}},
                 {{"from":"apparatus","to":"end"}}
+            ]
+        }}"#
+    )
+}
+
+fn laminatsiya_order_map_json(id: &str, width_mm: f64) -> String {
+    format!(
+        r#"{{
+            "id":"{id}",
+            "product_code":"LAMIN-{id}",
+            "title":"Laminatsiya order",
+            "order_number":"{id}",
+            "roll_count":7,
+            "width_mm":{width_mm},
+            "nodes":[
+                {{"id":"start","kind":"start","title":"Start"}},
+                {{"id":"laminatsiya","kind":"task","title":"Laminatsiya - A"}},
+                {{"id":"end","kind":"end","title":"End"}}
+            ],
+            "edges":[
+                {{"from":"start","to":"laminatsiya"}},
+                {{"from":"laminatsiya","to":"end"}}
             ]
         }}"#
     )
