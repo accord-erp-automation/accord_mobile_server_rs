@@ -585,7 +585,9 @@ impl ProductionMapService {
                 return Err(ProductionMapError::MoveNotAllowed);
             }
             let mut next = map;
-            if !reassign_apparatus_nodes(&mut next, from, to) {
+            if !reassign_alternative_apparatus_assignment(&mut next, from, to)
+                && !reassign_apparatus_nodes(&mut next, from, to)
+            {
                 return Err(ProductionMapError::MoveNotAllowed);
             }
             updated.push(next);
@@ -624,7 +626,9 @@ impl ProductionMapService {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         let mut next = map;
-        if !reassign_apparatus_nodes(&mut next, from, to) {
+        if !reassign_alternative_apparatus_assignment(&mut next, from, to)
+            && !reassign_apparatus_nodes(&mut next, from, to)
+        {
             return Err(ProductionMapError::MoveNotAllowed);
         }
         self.upsert_map(next).await
@@ -684,6 +688,53 @@ fn reassign_apparatus_nodes(map: &mut ProductionMapDefinition, from: &str, to: &
             && pechat::apparatus_node_matches_from(&node.title, from)
         {
             node.title = to.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn reassign_alternative_apparatus_assignment(
+    map: &mut ProductionMapDefinition,
+    from: &str,
+    to: &str,
+) -> bool {
+    let to = to.trim();
+    if to.is_empty() {
+        return false;
+    }
+    let candidate_groups: BTreeSet<String> = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && queue_state::apparatus_titles_match(&node.alternative_assigned_title, from)
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .collect();
+    if candidate_groups.is_empty() {
+        return false;
+    }
+    let target_groups: BTreeSet<String> = candidate_groups
+        .into_iter()
+        .filter(|group_id| {
+            map.nodes.iter().any(|node| {
+                node.kind == ProductionMapNodeKind::Apparatus
+                    && node.alternative_group_id.trim() == group_id
+                    && queue_state::apparatus_titles_match(&node.title, to)
+            })
+        })
+        .collect();
+    if target_groups.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for node in &mut map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus
+            && target_groups.contains(node.alternative_group_id.trim())
+        {
+            node.alternative_assigned_title = to.to_string();
             changed = true;
         }
     }
