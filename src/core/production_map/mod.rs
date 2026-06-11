@@ -670,6 +670,13 @@ fn visible_order_ids_for_apparatus(
 }
 
 fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
+    let from_is_laminatsiya = is_laminatsiya_title(from);
+    let to_is_laminatsiya = is_laminatsiya_title(to);
+    if from_is_laminatsiya || to_is_laminatsiya {
+        return from_is_laminatsiya
+            && to_is_laminatsiya
+            && alternative_assigned_group_contains_target(map, from, to);
+    }
     let Some(target_color) = pechat::pechat_color_count(to) else {
         return true;
     };
@@ -684,12 +691,37 @@ fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
     pechat::pechat_can_move_order(target_color, map.roll_count, map.width_mm, source_color)
 }
 
+fn alternative_assigned_group_contains_target(
+    map: &ProductionMapDefinition,
+    from: &str,
+    to: &str,
+) -> bool {
+    let candidate_groups: BTreeSet<String> = map
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == ProductionMapNodeKind::Apparatus
+                && !node.alternative_group_id.trim().is_empty()
+                && queue_state::apparatus_titles_match(&node.alternative_assigned_title, from)
+        })
+        .map(|node| node.alternative_group_id.trim().to_string())
+        .collect();
+    if candidate_groups.is_empty() {
+        return true;
+    }
+    map.nodes.iter().any(|node| {
+        node.kind == ProductionMapNodeKind::Apparatus
+            && candidate_groups.contains(node.alternative_group_id.trim())
+            && queue_state::apparatus_titles_match(&node.title, to)
+    })
+}
+
 fn reassign_apparatus_nodes(map: &mut ProductionMapDefinition, from: &str, to: &str) -> bool {
     let to = to.trim();
     let mut changed = false;
     for node in &mut map.nodes {
         if node.kind == ProductionMapNodeKind::Apparatus
-            && pechat::apparatus_node_matches_from(&node.title, from)
+            && queue_state::apparatus_titles_match(&node.title, from)
         {
             node.title = to.to_string();
             changed = true;
