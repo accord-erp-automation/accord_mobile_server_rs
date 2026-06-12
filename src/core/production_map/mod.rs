@@ -689,7 +689,10 @@ fn visible_order_ids_for_apparatus(
     apparatus: &str,
 ) -> Vec<String> {
     maps.iter()
-        .filter(|map| chain::map_has_work_stage_for_station(map, apparatus))
+        .filter(|map| {
+            !flexo_order_blocked_for_color_pechat(map, apparatus)
+                && chain::map_has_work_stage_for_station(map, apparatus)
+        })
         .map(|map| map.id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect()
@@ -706,6 +709,9 @@ fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
     let Some(target_color) = pechat::pechat_color_count(to) else {
         return true;
     };
+    if is_flexo_order(map) {
+        return false;
+    }
     let source_color = pechat::pechat_color_count(from).or_else(|| {
         pechat::order_pechat_color_count(
             map.nodes
@@ -715,6 +721,26 @@ fn move_allowed(map: &ProductionMapDefinition, from: &str, to: &str) -> bool {
         )
     });
     pechat::pechat_can_move_order(target_color, map.roll_count, map.width_mm, source_color)
+}
+
+fn flexo_order_blocked_for_color_pechat(map: &ProductionMapDefinition, apparatus: &str) -> bool {
+    is_flexo_order(map) && pechat::pechat_color_count(apparatus).is_some()
+}
+
+fn is_flexo_order(map: &ProductionMapDefinition) -> bool {
+    let mut haystack = format!("{} {} {}", map.title, map.product_code, map.code).to_lowercase();
+    for node in &map.nodes {
+        if node.kind == ProductionMapNodeKind::Apparatus {
+            continue;
+        }
+        haystack.push(' ');
+        haystack.push_str(&node.title.to_lowercase());
+        haystack.push(' ');
+        haystack.push_str(&node.item_code.to_lowercase());
+    }
+    ["fleksa", "fleska", "flex", "flexe", "flexo"]
+        .iter()
+        .any(|keyword| haystack.contains(keyword))
 }
 
 fn alternative_assigned_group_contains_target(

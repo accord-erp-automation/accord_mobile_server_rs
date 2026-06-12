@@ -681,6 +681,47 @@ async fn production_map_batch_move_allows_seven_to_eight_color_pechat() {
 }
 
 #[tokio::test]
+async fn production_map_batch_move_blocks_flexo_order_to_color_pechat() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let save = build_router(state.clone())
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps",
+            &token,
+            &production_order_map_json_with_product(
+                "zakaz-flexo-3031",
+                "vitagum flexo zip paket",
+                "FLEXO-3031",
+                "3031",
+                "Flexo pechat - A",
+                7.0,
+                650.0,
+            ),
+        ))
+        .await
+        .expect("save");
+    assert_eq!(save.status(), StatusCode::OK);
+
+    let moved = build_router(state)
+        .oneshot(request_with_body(
+            "POST",
+            "/v1/mobile/admin/production-maps/move-batch",
+            &token,
+            r#"{
+                "from_apparatus":"Flexo pechat - A",
+                "to_apparatus":"8 ta rangli pechat",
+                "map_ids":["zakaz-flexo-3031"]
+            }"#,
+        ))
+        .await
+        .expect("batch move");
+    assert_eq!(moved.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(moved).await["error"], "move_not_allowed");
+}
+
+#[tokio::test]
 async fn production_map_batch_move_reassigns_alternative_apparatus_assignment() {
     let state = test_state();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -1148,10 +1189,30 @@ fn pechat_order_map_json_with_dims(
     roll_count: f64,
     width_mm: f64,
 ) -> String {
+    production_order_map_json_with_product(
+        id,
+        title,
+        &format!("PECHAT-{order_number}"),
+        order_number,
+        apparatus,
+        roll_count,
+        width_mm,
+    )
+}
+
+fn production_order_map_json_with_product(
+    id: &str,
+    title: &str,
+    product_code: &str,
+    order_number: &str,
+    apparatus: &str,
+    roll_count: f64,
+    width_mm: f64,
+) -> String {
     format!(
         r#"{{
             "id":"{id}",
-            "product_code":"PECHAT-{order_number}",
+            "product_code":"{product_code}",
             "title":"{title}",
             "order_number":"{order_number}",
             "roll_count":{roll_count},
