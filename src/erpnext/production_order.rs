@@ -367,6 +367,9 @@ impl ErpnextClient {
                     None,
                 )
                 .await?;
+            if erp_doc_is_submitted(&latest.data) {
+                return Ok(());
+            }
             let result: Result<Value, ProductionOrderErpError> = self
                 .production_order_json_request(
                     Method::POST,
@@ -381,12 +384,40 @@ impl ErpnextClient {
                 {
                     continue;
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    if self
+                        .production_doc_is_submitted(doctype, name)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
             }
         }
         Err(ProductionOrderErpError::WriteFailed(format!(
             "{doctype} submit failed: {name}"
         )))
+    }
+
+    async fn production_doc_is_submitted(
+        &self,
+        doctype: &str,
+        name: &str,
+    ) -> Result<bool, ProductionOrderErpError> {
+        let latest: ResourceResponse<Value> = self
+            .production_order_json_request(
+                Method::GET,
+                &format!(
+                    "/api/resource/{}/{}",
+                    urlencoding::encode(doctype.trim()),
+                    urlencoding::encode(name.trim())
+                ),
+                None,
+            )
+            .await?;
+        Ok(erp_doc_is_submitted(&latest.data))
     }
 
     async fn erp_item(&self, item_code: &str) -> Result<ItemRow, ProductionOrderErpError> {
@@ -850,6 +881,11 @@ fn is_not_found_error(error: &ProductionOrderErpError) -> bool {
     error.to_string().contains("status 404")
 }
 
+fn erp_doc_is_submitted(doc: &Value) -> bool {
+    doc.get("docstatus").and_then(Value::as_i64) == Some(1)
+        || doc.get("docstatus").and_then(Value::as_f64) == Some(1.0)
+}
+
 fn encoded_path(path: &str) -> String {
     path.trim_start_matches(' ').replace(' ', "%20")
 }
@@ -1220,6 +1256,21 @@ mod tests {
         assert_eq!(payload["operations"][0]["sequence_id"], 1);
         assert_eq!(payload["operations"][0]["time_in_mins"], 1);
         assert_eq!(payload["operations"][0]["batch_size"], 7.0);
+    }
+
+    #[test]
+    fn submitted_erpnext_docstatus_counts_as_success_after_submit_transport_error() {
+        assert!(erp_doc_is_submitted(&serde_json::json!({ "docstatus": 1 })));
+        assert!(erp_doc_is_submitted(
+            &serde_json::json!({ "docstatus": 1.0 })
+        ));
+        assert!(!erp_doc_is_submitted(
+            &serde_json::json!({ "docstatus": 0 })
+        ));
+        assert!(!erp_doc_is_submitted(
+            &serde_json::json!({ "docstatus": 2 })
+        ));
+        assert!(!erp_doc_is_submitted(&serde_json::json!({})));
     }
 
     #[test]
