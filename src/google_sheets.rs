@@ -14,6 +14,27 @@ use crate::core::production_map::{ProductionMapDefinition, ProductionMapNodeKind
 
 const SHEETS_SCOPE: &str = "https://www.googleapis.com/auth/spreadsheets";
 const DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
+const ORDER_SHEET_ID: i64 = 0;
+const ORDER_SHEET_HEADER_RANGE: &str = "A1:P1";
+const ORDER_SHEET_FORMAT_ROW_LIMIT: i64 = 1000;
+const ORDER_SHEET_HEADERS: [&str; 16] = [
+    "pechat",
+    "sana",
+    "vaqt",
+    "kod",
+    "zakaz nomi",
+    "zakaz kg",
+    "1 qavat",
+    "2 qavat",
+    "3 qavat",
+    "material razmer",
+    "1 qavat mikron",
+    "2 qavat mikron",
+    "3 qavat mikron",
+    "metr",
+    "qolib soni",
+    "rezina razmer",
+];
 
 #[async_trait]
 pub trait OrderSheetSink: Send + Sync {
@@ -62,6 +83,8 @@ pub enum OrderSheetError {
     AppendFailed,
     #[error("google sheets read failed")]
     ReadFailed,
+    #[error("google sheets format failed")]
+    FormatFailed,
 }
 
 pub fn discover_order_sheet_sink() -> Arc<dyn OrderSheetSink> {
@@ -128,6 +151,8 @@ struct GoogleSheetsOrderSink {
     token_provider: ServiceAccountTokenProvider,
     append_endpoint: String,
     read_endpoint: String,
+    update_header_endpoint: String,
+    batch_update_endpoint: String,
 }
 
 impl GoogleSheetsOrderSink {
@@ -145,13 +170,17 @@ impl GoogleSheetsOrderSink {
             read_endpoint: format!(
                 "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}"
             ),
+            update_header_endpoint: format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{}?valueInputOption=USER_ENTERED",
+                urlencoding::encode(ORDER_SHEET_HEADER_RANGE),
+            ),
+            batch_update_endpoint: format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate"
+            ),
         }
     }
 
-    async fn existing_codes(
-        &self,
-        access_token: &str,
-    ) -> Result<BTreeSet<String>, OrderSheetError> {
+    async fn read_rows(&self, access_token: &str) -> Result<Vec<Vec<Value>>, OrderSheetError> {
         let response = self
             .http_client
             .get(&self.read_endpoint)
@@ -166,7 +195,85 @@ impl GoogleSheetsOrderSink {
             .json()
             .await
             .map_err(|_| OrderSheetError::ReadFailed)?;
-        Ok(sheet_codes(values.values))
+        Ok(values.values)
+    }
+
+    async fn existing_codes(
+        &self,
+        access_token: &str,
+    ) -> Result<BTreeSet<String>, OrderSheetError> {
+        Ok(sheet_codes(self.read_rows(access_token).await?))
+    }
+
+    async fn ensure_layout(&self, access_token: &str) -> Result<(), OrderSheetError> {
+        let rows = self.read_rows(access_token).await?;
+        if !sheet_has_header(&rows) {
+            self.insert_header_row(access_token).await?;
+        }
+        self.write_header(access_token).await?;
+        self.apply_format(access_token).await
+    }
+
+    async fn insert_header_row(&self, access_token: &str) -> Result<(), OrderSheetError> {
+        let payload = BatchUpdateRequest {
+            requests: vec![json_insert_header_row()],
+        };
+        let response = self
+            .http_client
+            .post(&self.batch_update_endpoint)
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| OrderSheetError::FormatFailed)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(OrderSheetError::FormatFailed)
+        }
+    }
+
+    async fn write_header(&self, access_token: &str) -> Result<(), OrderSheetError> {
+        let payload = AppendValuesRequest {
+            values: vec![
+                ORDER_SHEET_HEADERS
+                    .into_iter()
+                    .map(|value| Value::String(value.to_string()))
+                    .collect(),
+            ],
+        };
+        let response = self
+            .http_client
+            .put(&self.update_header_endpoint)
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| OrderSheetError::FormatFailed)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(OrderSheetError::FormatFailed)
+        }
+    }
+
+    async fn apply_format(&self, access_token: &str) -> Result<(), OrderSheetError> {
+        let payload = BatchUpdateRequest {
+            requests: sheet_format_requests(),
+        };
+        let response = self
+            .http_client
+            .post(&self.batch_update_endpoint)
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| OrderSheetError::FormatFailed)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(OrderSheetError::FormatFailed)
+        }
     }
 
     async fn append_rows(
@@ -207,6 +314,7 @@ impl OrderSheetSink for GoogleSheetsOrderSink {
     ) -> Result<(), OrderSheetError> {
         let row = order_sheet_row(map, template).ok_or(OrderSheetError::NoRow)?;
         let access_token = self.token_provider.access_token(&self.http_client).await?;
+        self.ensure_layout(&access_token).await?;
         let existing_codes = self.existing_codes(&access_token).await?;
         let code = row_code(&row);
         if existing_codes.contains(&code) {
@@ -221,6 +329,7 @@ impl OrderSheetSink for GoogleSheetsOrderSink {
         templates: &[CalculateOrderTemplate],
     ) -> Result<usize, OrderSheetError> {
         let access_token = self.token_provider.access_token(&self.http_client).await?;
+        self.ensure_layout(&access_token).await?;
         let existing_codes = self.existing_codes(&access_token).await?;
         let rows = missing_order_rows(maps, templates, &existing_codes);
         let count = rows.len();
@@ -331,6 +440,15 @@ fn sheet_codes(values: Vec<Vec<Value>>) -> BTreeSet<String> {
         .filter_map(|row| row.get(3).and_then(value_text).map(normalize_sheet_code))
         .filter(|code| !code.is_empty())
         .collect()
+}
+
+fn sheet_has_header(rows: &[Vec<Value>]) -> bool {
+    let Some(row) = rows.first() else {
+        return false;
+    };
+    row.first().and_then(value_text) == Some(ORDER_SHEET_HEADERS[0])
+        && row.get(1).and_then(value_text) == Some(ORDER_SHEET_HEADERS[1])
+        && row.get(3).and_then(value_text) == Some(ORDER_SHEET_HEADERS[3])
 }
 
 fn row_code(row: &[Value]) -> String {
@@ -522,6 +640,195 @@ struct JwtClaims<'a> {
 #[derive(Serialize)]
 struct AppendValuesRequest {
     values: Vec<Vec<Value>>,
+}
+
+#[derive(Serialize)]
+struct BatchUpdateRequest {
+    requests: Vec<Value>,
+}
+
+fn json_insert_header_row() -> Value {
+    serde_json::json!({
+        "insertDimension": {
+            "range": {
+                "sheetId": ORDER_SHEET_ID,
+                "dimension": "ROWS",
+                "startIndex": 0,
+                "endIndex": 1
+            },
+            "inheritFromBefore": false
+        }
+    })
+}
+
+fn sheet_format_requests() -> Vec<Value> {
+    let full_range = serde_json::json!({
+        "sheetId": ORDER_SHEET_ID,
+        "startRowIndex": 0,
+        "endRowIndex": ORDER_SHEET_FORMAT_ROW_LIMIT,
+        "startColumnIndex": 0,
+        "endColumnIndex": ORDER_SHEET_HEADERS.len()
+    });
+    let header_range = serde_json::json!({
+        "sheetId": ORDER_SHEET_ID,
+        "startRowIndex": 0,
+        "endRowIndex": 1,
+        "startColumnIndex": 0,
+        "endColumnIndex": ORDER_SHEET_HEADERS.len()
+    });
+    let mut requests = vec![
+        serde_json::json!({
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": ORDER_SHEET_ID,
+                    "gridProperties": {
+                        "frozenRowCount": 1
+                    }
+                },
+                "fields": "gridProperties.frozenRowCount"
+            }
+        }),
+        serde_json::json!({
+            "repeatCell": {
+                "range": full_range.clone(),
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 0.61,
+                            "green": 0.88,
+                            "blue": 0.89
+                        },
+                        "textFormat": {
+                            "fontFamily": "Arial",
+                            "fontSize": 10,
+                            "foregroundColor": {
+                                "red": 0.0,
+                                "green": 0.0,
+                                "blue": 0.0
+                            }
+                        },
+                        "horizontalAlignment": "CENTER",
+                        "verticalAlignment": "MIDDLE",
+                        "wrapStrategy": "WRAP"
+                    }
+                },
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)"
+            }
+        }),
+        serde_json::json!({
+            "repeatCell": {
+                "range": header_range,
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "bold": true,
+                            "fontFamily": "Arial",
+                            "fontSize": 10
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat"
+            }
+        }),
+        serde_json::json!({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ORDER_SHEET_ID,
+                    "startRowIndex": 1,
+                    "endRowIndex": ORDER_SHEET_FORMAT_ROW_LIMIT,
+                    "startColumnIndex": 4,
+                    "endColumnIndex": 5
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "horizontalAlignment": "LEFT",
+                        "textFormat": {
+                            "bold": true,
+                            "italic": false
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat(horizontalAlignment,textFormat.bold,textFormat.italic)"
+            }
+        }),
+        serde_json::json!({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ORDER_SHEET_ID,
+                    "startRowIndex": 1,
+                    "endRowIndex": ORDER_SHEET_FORMAT_ROW_LIMIT,
+                    "startColumnIndex": 6,
+                    "endColumnIndex": 14
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "italic": true,
+                            "bold": true
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat"
+            }
+        }),
+        serde_json::json!({
+            "updateBorders": {
+                "range": full_range.clone(),
+                "top": sheet_border(),
+                "bottom": sheet_border(),
+                "left": sheet_border(),
+                "right": sheet_border(),
+                "innerHorizontal": sheet_border(),
+                "innerVertical": sheet_border()
+            }
+        }),
+    ];
+    for (column, width) in [
+        (0, 34),
+        (1, 86),
+        (2, 86),
+        (3, 86),
+        (4, 360),
+        (5, 84),
+        (6, 92),
+        (7, 92),
+        (8, 92),
+        (9, 106),
+        (10, 106),
+        (11, 106),
+        (12, 106),
+        (13, 100),
+        (14, 90),
+        (15, 110),
+    ] {
+        requests.push(serde_json::json!({
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": ORDER_SHEET_ID,
+                    "dimension": "COLUMNS",
+                    "startIndex": column,
+                    "endIndex": column + 1
+                },
+                "properties": {
+                    "pixelSize": width
+                },
+                "fields": "pixelSize"
+            }
+        }));
+    }
+    requests
+}
+
+fn sheet_border() -> Value {
+    serde_json::json!({
+        "style": "SOLID",
+        "width": 1,
+        "color": {
+            "red": 0.0,
+            "green": 0.0,
+            "blue": 0.0
+        }
+    })
 }
 
 #[derive(Deserialize)]
