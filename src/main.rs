@@ -8,6 +8,7 @@ mod error;
 mod fcm;
 #[cfg(test)]
 mod fcm_tests;
+mod google_sheets;
 mod http;
 mod rps;
 mod store;

@@ -7,6 +7,7 @@ use crate::core::production_map::{
     ProductionMapBatchMoveRequest, ProductionMapDefinition, ProductionMapError,
     ProductionMapMoveRequest, ProductionMapRunRequest, queue_state,
 };
+use crate::google_sheets::is_sheet_order_map;
 use async_stream::stream;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_core::Stream;
@@ -138,6 +139,16 @@ pub async fn production_map_save_with_order(
         }
         None => None,
     };
+    if previous.is_none()
+        && is_sheet_order_map(&saved_map.map)
+        && let Some(template) = saved_template.as_ref()
+        && let Err(error) = state
+            .order_sheets
+            .append_order(&saved_map.map, template)
+            .await
+    {
+        tracing::warn!(?error, map_id = %saved_map.map.id, "google sheets order append failed");
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "saved": saved_map,

@@ -25,6 +25,7 @@ use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_on
 use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
 use crate::fcm::discover_push_sender;
+use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
 use crate::store::admin_state_store::AdminSupplierStateBackend;
 use crate::store::apparatus_group_store::ApparatusGroupStore;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub production_maps: ProductionMapService,
     pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    pub order_sheets: Arc<dyn OrderSheetSink>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
@@ -74,6 +76,7 @@ impl AppState {
             apparatus_group_store_path(),
         )));
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
+        let order_sheets = discover_order_sheet_sink();
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
@@ -264,6 +267,7 @@ impl AppState {
             production_maps,
             apparatus_groups,
             calculate_orders,
+            order_sheets,
             calculate_order_image_dir,
             push,
             gscale,
