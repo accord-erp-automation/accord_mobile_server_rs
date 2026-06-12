@@ -68,18 +68,22 @@ impl ProductionOrderErpSink for ErpnextClient {
                 "item code is empty".to_string(),
             ));
         }
-        let item = self.erp_item(&item_code).await?;
-        if item.default_bom.trim().is_empty() {
-            return Err(ProductionOrderErpError::WriteFailed(format!(
-                "item default_bom is empty: {item_code}"
-            )));
-        }
         let fg_warehouse = self.resolve_fg_warehouse().await?;
         let company = self.erp_warehouse_company(&fg_warehouse).await?;
+        let product_name = first_non_empty([&template.product, &template.name, &map.title]);
+        let item = self
+            .ensure_item_exists(&item_code, &product_name, "Tayyor mahsulot", "Kg")
+            .await?;
+        let bom_no = if item.default_bom.trim().is_empty() {
+            self.create_submitted_bom(map, template, &item_code, &item.stock_uom, &company)
+                .await?
+        } else {
+            item.default_bom
+        };
         let mut payload = build_work_order_payload(map, template);
         payload["company"] = Value::String(company);
         payload["fg_warehouse"] = Value::String(fg_warehouse);
-        payload["bom_no"] = Value::String(item.default_bom);
+        payload["bom_no"] = Value::String(bom_no);
         payload["stock_uom"] = Value::String(item.stock_uom);
         payload["planned_start_date"] = Value::String(now_erp_datetime());
         let _: ResourceResponse<NameRow> = self
@@ -186,6 +190,205 @@ impl ProductionOrderErpSource for DirectDbReader {
 }
 
 impl ErpnextClient {
+    async fn create_submitted_bom(
+        &self,
+        map: &ProductionMapDefinition,
+        template: &CalculateOrderTemplate,
+        item_code: &str,
+        item_uom: &str,
+        company: &str,
+    ) -> Result<String, ProductionOrderErpError> {
+        self.ensure_bom_master_data(map, template).await?;
+        let payload = build_bom_payload(map, template, company, item_uom);
+        let created: ResourceResponse<NameRow> = self
+            .production_order_json_request(Method::POST, "/api/resource/BOM", Some(payload))
+            .await?;
+        self.submit_production_doc("BOM", &created.data.name)
+            .await?;
+        let item = self.erp_item(item_code).await?;
+        if !item.default_bom.trim().is_empty() {
+            return Ok(item.default_bom);
+        }
+        Ok(created.data.name)
+    }
+
+    async fn ensure_bom_master_data(
+        &self,
+        map: &ProductionMapDefinition,
+        template: &CalculateOrderTemplate,
+    ) -> Result<(), ProductionOrderErpError> {
+        for layer in bom_material_layers(template) {
+            self.ensure_item_exists(&layer.item_code, &layer.item_code, "Xomashyo", "Kg")
+                .await?;
+        }
+        for node in apparatus_nodes_in_flow_order(map) {
+            let workstation = workstation_name(node);
+            self.ensure_workstation(&workstation).await?;
+            self.ensure_operation(operation_name(&node.title)).await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_item_exists(
+        &self,
+        item_code: &str,
+        item_name: &str,
+        item_group: &str,
+        stock_uom: &str,
+    ) -> Result<ItemRow, ProductionOrderErpError> {
+        match self.erp_item(item_code).await {
+            Ok(item) => Ok(item),
+            Err(error) if is_not_found_error(&error) => {
+                let payload = serde_json::json!({
+                    "item_code": item_code.trim(),
+                    "item_name": first_non_empty([item_name, item_code]),
+                    "item_group": item_group.trim(),
+                    "stock_uom": stock_uom.trim(),
+                    "is_stock_item": 1,
+                    "include_item_in_manufacturing": 1,
+                });
+                let _: ResourceResponse<NameRow> = self
+                    .production_order_json_request(
+                        Method::POST,
+                        "/api/resource/Item",
+                        Some(payload),
+                    )
+                    .await?;
+                self.erp_item(item_code).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn ensure_workstation(&self, name: &str) -> Result<(), ProductionOrderErpError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        self.ensure_resource_exists(
+            "Workstation",
+            name,
+            serde_json::json!({
+                "workstation_name": name,
+                "production_capacity": 1,
+                "description": "RS production map workstation",
+            }),
+        )
+        .await
+    }
+
+    async fn ensure_operation(&self, name: &str) -> Result<(), ProductionOrderErpError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        self.ensure_resource_exists(
+            "Operation",
+            name,
+            serde_json::json!({
+                "__newname": name,
+                "name": name,
+                "description": "RS production map operation",
+                "batch_size": 1,
+            }),
+        )
+        .await
+    }
+
+    async fn ensure_resource_exists(
+        &self,
+        doctype: &str,
+        name: &str,
+        payload: Value,
+    ) -> Result<(), ProductionOrderErpError> {
+        if self.resource_exists(doctype, name).await? {
+            return Ok(());
+        }
+        let _: ResourceResponse<NameRow> = self
+            .production_order_json_request(
+                Method::POST,
+                &format!("/api/resource/{}", urlencoding::encode(doctype.trim())),
+                Some(payload),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn resource_exists(
+        &self,
+        doctype: &str,
+        name: &str,
+    ) -> Result<bool, ProductionOrderErpError> {
+        let response = self
+            .http
+            .request(
+                Method::GET,
+                format!(
+                    "{}/api/resource/{}/{}",
+                    self.base_url(),
+                    urlencoding::encode(doctype.trim()),
+                    urlencoding::encode(name.trim())
+                ),
+            )
+            .header(reqwest::header::AUTHORIZATION, self.auth_header().await)
+            .send()
+            .await
+            .map_err(|error| ProductionOrderErpError::WriteFailed(error.to_string()))?;
+        if response.status().as_u16() == 404 {
+            return Ok(false);
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .map_err(|error| ProductionOrderErpError::WriteFailed(error.to_string()))?;
+            return Err(ProductionOrderErpError::WriteFailed(format!(
+                "status {status}: {body}"
+            )));
+        }
+        Ok(true)
+    }
+
+    async fn submit_production_doc(
+        &self,
+        doctype: &str,
+        name: &str,
+    ) -> Result<(), ProductionOrderErpError> {
+        for attempt in 0..2 {
+            let latest: ResourceResponse<Value> = self
+                .production_order_json_request(
+                    Method::GET,
+                    &format!(
+                        "/api/resource/{}/{}",
+                        urlencoding::encode(doctype.trim()),
+                        urlencoding::encode(name.trim())
+                    ),
+                    None,
+                )
+                .await?;
+            let result: Result<Value, ProductionOrderErpError> = self
+                .production_order_json_request(
+                    Method::POST,
+                    "/api/method/frappe.client.submit",
+                    Some(serde_json::json!({ "doc": latest.data })),
+                )
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(ProductionOrderErpError::WriteFailed(message))
+                    if attempt == 0 && message.contains("TimestampMismatchError") =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(ProductionOrderErpError::WriteFailed(format!(
+            "{doctype} submit failed: {name}"
+        )))
+    }
+
     async fn erp_item(&self, item_code: &str) -> Result<ItemRow, ProductionOrderErpError> {
         let response: ResourceResponse<ItemRow> = self
             .production_order_json_request(
@@ -322,6 +525,159 @@ fn build_work_order_payload(
         "transfer_material_against": "Job Card",
         "operations": operations,
     })
+}
+
+fn build_bom_payload(
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+    company: &str,
+    item_uom: &str,
+) -> Value {
+    let item_code = first_non_empty([&template.item_code, &map.product_code]);
+    let order_number = first_non_empty([
+        &map.order_number,
+        &map.code,
+        &template.order_number,
+        &template.code,
+    ]);
+    let roll_count = template.roll_count.or(map.roll_count).unwrap_or_default();
+    let rubber_size = rubber_size_mm(template).unwrap_or_default();
+    let items = bom_material_items(template);
+    let operations: Vec<Value> = apparatus_nodes_in_flow_order(map)
+        .into_iter()
+        .enumerate()
+        .map(|(index, node)| {
+            serde_json::json!({
+                "operation": operation_name(&node.title),
+                "workstation": workstation_name(node),
+                "description": operation_description(map, template, &order_number, rubber_size),
+                "sequence_id": index + 1,
+                "batch_size": roll_count,
+                "time_in_mins": 1,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "item": item_code,
+        "company": company.trim(),
+        "quantity": 1.0,
+        "uom": first_non_empty([item_uom, "Kg"]),
+        "is_active": 1,
+        "is_default": 1,
+        "with_operations": if operations.is_empty() { 0 } else { 1 },
+        "transfer_material_against": "Job Card",
+        "rm_cost_as_per": "Valuation Rate",
+        "items": items,
+        "operations": operations,
+    })
+}
+
+fn bom_material_items(template: &CalculateOrderTemplate) -> Vec<Value> {
+    bom_material_layers(template)
+        .into_iter()
+        .map(|layer| {
+            serde_json::json!({
+                "item_code": layer.item_code,
+                "qty": layer.qty,
+                "uom": "Kg",
+                "stock_uom": "Kg",
+                "rate": 0.0,
+                "include_item_in_manufacturing": 1,
+                "description": format!("{}: {} {}", layer.layer, layer.item_code, number_text(layer.micron)),
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BomMaterialLayer {
+    layer: &'static str,
+    item_code: String,
+    micron: f64,
+    qty: f64,
+}
+
+fn bom_material_layers(template: &CalculateOrderTemplate) -> Vec<BomMaterialLayer> {
+    let mut layers = Vec::new();
+    layers.extend(expand_bom_material_layer(
+        "1 qavat",
+        &template.first_layer_material,
+        &template.first_layer_micron,
+    ));
+    layers.extend(expand_bom_material_layer(
+        "2 qavat",
+        &template.second_layer_material,
+        &template.second_layer_micron,
+    ));
+    layers.extend(expand_bom_material_layer(
+        "3 qavat",
+        &template.third_layer_material,
+        &template.third_layer_micron,
+    ));
+    let positive_total = layers
+        .iter()
+        .map(|layer| layer.micron)
+        .filter(|micron| *micron > 0.0)
+        .sum::<f64>();
+    if positive_total > 0.0 {
+        for layer in &mut layers {
+            layer.qty = layer.micron / positive_total;
+        }
+    } else if !layers.is_empty() {
+        let equal_qty = 1.0 / layers.len() as f64;
+        for layer in &mut layers {
+            layer.qty = equal_qty;
+        }
+    }
+    layers
+}
+
+fn expand_bom_material_layer(
+    layer: &'static str,
+    material: &str,
+    micron_text: &str,
+) -> Vec<BomMaterialLayer> {
+    let material = material.trim();
+    if material.is_empty() {
+        return Vec::new();
+    }
+    let materials = split_layer_parts(material);
+    let microns = parse_micron_numbers(micron_text);
+    if materials.len() > 1 && microns.len() == materials.len() {
+        return materials
+            .into_iter()
+            .zip(microns)
+            .map(|(item_code, micron)| BomMaterialLayer {
+                layer,
+                item_code,
+                micron,
+                qty: 0.0,
+            })
+            .collect();
+    }
+    vec![BomMaterialLayer {
+        layer,
+        item_code: material.to_string(),
+        micron: microns.into_iter().reduce(f64::max).unwrap_or_default(),
+        qty: 0.0,
+    }]
+}
+
+fn split_layer_parts(value: &str) -> Vec<String> {
+    value
+        .split('/')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn parse_micron_numbers(value: &str) -> Vec<f64> {
+    value
+        .trim()
+        .split('/')
+        .filter_map(|part| part.trim().parse::<f64>().ok())
+        .collect()
 }
 
 fn apparatus_nodes_in_flow_order(map: &ProductionMapDefinition) -> Vec<&ProductionMapNode> {
@@ -488,6 +844,10 @@ fn now_erp_datetime() -> String {
         now.minute(),
         now.second()
     )
+}
+
+fn is_not_found_error(error: &ProductionOrderErpError) -> bool {
+    error.to_string().contains("status 404")
 }
 
 fn encoded_path(path: &str) -> String {
@@ -787,6 +1147,79 @@ mod tests {
         assert!(description.contains("1 qavat: pet 12"));
         assert!(description.contains("2 qavat: pe oq 50"));
         assert!(description.contains("3 qavat: cpp 20"));
+    }
+
+    #[test]
+    fn bom_payload_maps_order_to_standard_erpnext_manufacturing_fields() {
+        let map = ProductionMapDefinition {
+            id: "zakaz-8970".to_string(),
+            product_code: "dolce cake".to_string(),
+            title: "dolce cake".to_string(),
+            code: "8970".to_string(),
+            order_number: "8970".to_string(),
+            roll_count: Some(7.0),
+            width_mm: Some(730.0),
+            nodes: vec![
+                node("start", ProductionMapNodeKind::Start, "Start"),
+                node(
+                    "pechat",
+                    ProductionMapNodeKind::Apparatus,
+                    "7 ta rangli pechat - A",
+                ),
+                node("lam", ProductionMapNodeKind::Apparatus, "Laminatsiya 1 - A"),
+                node("end", ProductionMapNodeKind::End, "End"),
+            ],
+            edges: vec![
+                edge("start", "pechat"),
+                edge("pechat", "lam"),
+                edge("lam", "end"),
+            ],
+        };
+        let template = CalculateOrderTemplate {
+            name: "dolce cake".to_string(),
+            product: "dolce cake".to_string(),
+            item_code: "dolce cake".to_string(),
+            width_mm: 730.0,
+            waste_percent: 3.0,
+            roll_count: Some(7.0),
+            first_layer_material: "pet".to_string(),
+            first_layer_micron: "12".to_string(),
+            second_layer_material: "pe oq".to_string(),
+            second_layer_micron: "50".to_string(),
+            kg: 53453.0,
+            ..CalculateOrderTemplate::default()
+        };
+
+        let payload = build_bom_payload(&map, &template, "Accord", "Kg");
+
+        assert_eq!(payload["item"], "dolce cake");
+        assert_eq!(payload["company"], "Accord");
+        assert_eq!(payload["quantity"], 1.0);
+        assert_eq!(payload["uom"], "Kg");
+        assert_eq!(payload["is_active"], 1);
+        assert_eq!(payload["is_default"], 1);
+        assert_eq!(payload["with_operations"], 1);
+        assert_eq!(payload["transfer_material_against"], "Job Card");
+        assert_eq!(payload["rm_cost_as_per"], "Valuation Rate");
+        assert_eq!(payload["items"].as_array().expect("items").len(), 2);
+        assert_eq!(payload["items"][0]["item_code"], "pet");
+        assert_eq!(payload["items"][0]["uom"], "Kg");
+        assert_eq!(payload["items"][0]["include_item_in_manufacturing"], 1);
+        assert_eq!(payload["items"][0]["qty"], 12.0 / 62.0);
+        assert_eq!(payload["items"][1]["item_code"], "pe oq");
+        assert_eq!(payload["items"][1]["qty"], 50.0 / 62.0);
+        assert_eq!(
+            payload["operations"].as_array().expect("operations").len(),
+            2
+        );
+        assert_eq!(payload["operations"][0]["operation"], "Pechat");
+        assert_eq!(
+            payload["operations"][0]["workstation"],
+            "7 ta rangli pechat - A"
+        );
+        assert_eq!(payload["operations"][0]["sequence_id"], 1);
+        assert_eq!(payload["operations"][0]["time_in_mins"], 1);
+        assert_eq!(payload["operations"][0]["batch_size"], 7.0);
     }
 
     #[test]
