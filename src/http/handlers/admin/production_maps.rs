@@ -15,6 +15,7 @@ use std::time::Duration;
 
 pub async fn production_maps(
     State(state): State<AppState>,
+    Query(query): Query<ProductionMapsQuery>,
     method: Method,
     headers: HeaderMap,
     body: Bytes,
@@ -34,6 +35,15 @@ pub async fn production_maps(
     }
     match method {
         Method::GET => {
+            if !query.id.trim().is_empty() {
+                let saved = state
+                    .production_maps
+                    .map(&query.id)
+                    .await
+                    .map_err(production_map_error)?
+                    .ok_or_else(|| not_found("map_not_found"))?;
+                return Ok(json_response(saved));
+            }
             let maps = state
                 .production_maps
                 .maps()
@@ -56,6 +66,12 @@ pub async fn production_maps(
         }
         _ => Err(method_not_allowed()),
     }
+}
+
+#[derive(Default, serde::Deserialize)]
+pub(crate) struct ProductionMapsQuery {
+    #[serde(default)]
+    id: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -99,24 +115,27 @@ pub async fn production_map_save_with_order(
         .await
         .map_err(production_map_error)?;
     let saved_template = match input.template {
-        Some(template) => match state
-            .calculate_orders
-            .upsert(&owner_key, template)
-            .await
-            .map_err(calculate_order_error)
-        {
-            Ok(saved_template) => Some(saved_template),
-            Err(error) => {
-                if let Err(rollback_error) = state
-                    .production_maps
-                    .restore_map(previous.as_ref(), &map_id)
-                    .await
-                {
-                    tracing::error!(?rollback_error, "with-order map rollback failed");
+        Some(mut template) => {
+            template.source_map_id = saved_map.map.id.trim().to_string();
+            match state
+                .calculate_orders
+                .upsert(&owner_key, template)
+                .await
+                .map_err(calculate_order_error)
+            {
+                Ok(saved_template) => Some(saved_template),
+                Err(error) => {
+                    if let Err(rollback_error) = state
+                        .production_maps
+                        .restore_map(previous.as_ref(), &map_id)
+                        .await
+                    {
+                        tracing::error!(?rollback_error, "with-order map rollback failed");
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
-        },
+        }
         None => None,
     };
     Ok(json_response(serde_json::json!({

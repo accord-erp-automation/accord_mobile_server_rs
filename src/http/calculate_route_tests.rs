@@ -98,7 +98,7 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
     let create_body = json_body(create).await;
     assert_eq!(create_body["ok"], true);
     assert_eq!(create_body["template"]["name"], "CPP 600");
-    assert!(create_body["template"].get("kg").is_none());
+    assert_eq!(create_body["template"]["kg"], serde_json::json!(999.0));
 
     let list = build_router(state.clone())
         .oneshot(request("GET", "/v1/mobile/calculate/orders", &token, ""))
@@ -114,7 +114,7 @@ async fn calculate_orders_round_trip_on_server_without_kg() {
     assert_eq!(list_body["templates"][0]["image_id"], "img-test");
     assert_eq!(list_body["templates"][0]["customer_ref"], "CUST-001");
     assert_eq!(list_body["templates"][0]["item_code"], "ITEM-001");
-    assert!(list_body["templates"][0].get("kg").is_none());
+    assert_eq!(list_body["templates"][0]["kg"], serde_json::json!(999.0));
 
     let id = list_body["templates"][0]["id"].as_str().expect("id");
     let delete_body = format!(r#"{{"id":"{id}"}}"#);

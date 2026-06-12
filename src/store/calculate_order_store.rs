@@ -177,6 +177,7 @@ fn stamp_template(
     template.third_layer_material = template.third_layer_material.trim().to_string();
     template.third_layer_micron = template.third_layer_micron.trim().to_string();
     template.note = template.note.trim().to_string();
+    template.source_map_id = template.source_map_id.trim().to_string();
     template.saved_at = unix_micros().to_string();
     template
 }
@@ -408,6 +409,8 @@ mod tests {
                     third_layer_material: String::new(),
                     third_layer_micron: String::new(),
                     note: String::new(),
+                    kg: 0.0,
+                    source_map_id: String::new(),
                 },
             )
             .await
@@ -489,6 +492,8 @@ mod tests {
             third_layer_material: String::new(),
             third_layer_micron: String::new(),
             note: String::new(),
+            kg: 0.0,
+            source_map_id: String::new(),
         };
 
         let first = store
@@ -567,6 +572,8 @@ mod tests {
             third_layer_material: String::new(),
             third_layer_micron: String::new(),
             note: String::new(),
+            kg: 0.0,
+            source_map_id: String::new(),
         };
         let newer = CalculateOrderTemplate {
             id: "new-id".to_string(),

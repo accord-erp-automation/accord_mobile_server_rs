@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct CalculateOrderTemplate {
     #[serde(default)]
     pub id: String,
@@ -58,6 +58,10 @@ pub struct CalculateOrderTemplate {
     pub third_layer_micron: String,
     #[serde(default)]
     pub note: String,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub kg: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_map_id: String,
 }
 
 #[derive(Debug, Error)]
@@ -126,4 +130,8 @@ pub fn owner_key(role: &str, ref_: &str) -> String {
 
 fn default_waste_percent() -> f64 {
     5.0
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
 }

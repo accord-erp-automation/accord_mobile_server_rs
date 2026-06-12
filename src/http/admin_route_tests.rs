@@ -418,6 +418,7 @@ async fn production_map_save_with_order_saves_map_and_template() {
     assert_eq!(value["ok"], true);
     assert_eq!(value["saved"]["map"]["id"], "zakaz-7777");
     assert_eq!(value["template"]["name"], "atomic mahsulot");
+    assert_eq!(value["template"]["source_map_id"], "zakaz-7777");
     let template_id = value["template"]["id"]
         .as_str()
         .expect("template id")
@@ -429,6 +430,18 @@ async fn production_map_save_with_order_saves_map_and_template() {
             .map(|code| !code.trim().is_empty())
             .unwrap_or(false)
     );
+
+    let fetched = build_router(state.clone())
+        .oneshot(request(
+            "GET",
+            "/v1/mobile/admin/production-maps?id=zakaz-7777",
+            &token,
+        ))
+        .await
+        .expect("fetch map by id");
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched_value = json_body(fetched).await;
+    assert_eq!(fetched_value["map"]["id"], "zakaz-7777");
 
     let cleanup_body = format!(r#"{{"id":"{template_id}"}}"#);
     let cleanup = build_router(state)

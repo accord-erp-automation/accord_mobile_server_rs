@@ -422,6 +422,24 @@ impl ProductionMapService {
             .collect()
     }
 
+    pub async fn map(
+        &self,
+        map_id: &str,
+    ) -> Result<Option<ProductionMapSaved>, ProductionMapError> {
+        let map_id = map_id.trim();
+        if map_id.is_empty() {
+            return Err(ProductionMapError::MissingId);
+        }
+        let Some(mut map) = self.raw_map(map_id).await? else {
+            return Ok(None);
+        };
+        if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
+            map.code = map.order_number.trim().to_string();
+        }
+        let program = compile_map(&map)?;
+        Ok(Some(ProductionMapSaved { map, program }))
+    }
+
     pub async fn apparatus_sequences(
         &self,
     ) -> Result<BTreeMap<String, Vec<String>>, ProductionMapError> {
