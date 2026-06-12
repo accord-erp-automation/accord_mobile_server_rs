@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{RwLock, broadcast};
+#[cfg(test)]
+use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 
 pub mod chain;
 pub mod pechat;
@@ -260,12 +262,14 @@ pub trait ProductionMapStorePort: Send + Sync {
     ) -> Result<(), ProductionMapError>;
 }
 
+#[cfg(test)]
 pub struct MemoryProductionMapStore {
     maps: RwLock<BTreeMap<String, ProductionMapDefinition>>,
     sequences: RwLock<BTreeMap<String, Vec<String>>>,
     queue_states: RwLock<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
+#[cfg(test)]
 impl MemoryProductionMapStore {
     pub fn new() -> Self {
         Self {
@@ -276,6 +280,7 @@ impl MemoryProductionMapStore {
     }
 }
 
+#[cfg(test)]
 impl Default for MemoryProductionMapStore {
     fn default() -> Self {
         Self::new()
@@ -283,6 +288,7 @@ impl Default for MemoryProductionMapStore {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl ProductionMapStorePort for MemoryProductionMapStore {
     async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionMapError> {
         Ok(self.maps.read().await.values().cloned().collect())
@@ -840,6 +846,7 @@ pub fn compile_map(
     })
 }
 
+#[cfg(test)]
 fn reject_order_number_immutable(
     maps: &BTreeMap<String, ProductionMapDefinition>,
     next: &ProductionMapDefinition,
@@ -1349,6 +1356,7 @@ impl<'a> FormulaParser<'a> {
     }
 }
 
+#[cfg(test)]
 pub fn run_map(
     map: &ProductionMapDefinition,
     order_qty: f64,

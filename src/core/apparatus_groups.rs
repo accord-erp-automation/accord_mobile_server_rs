@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+#[cfg(test)]
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,10 +81,12 @@ fn normalize_group(input: ApparatusGroupUpsert) -> Result<ApparatusGroup, Appara
 }
 
 #[derive(Default)]
+#[cfg(test)]
 pub struct MemoryApparatusGroupStore {
     groups: RwLock<Vec<ApparatusGroup>>,
 }
 
+#[cfg(test)]
 impl MemoryApparatusGroupStore {
     pub fn new() -> Self {
         Self::default()
@@ -91,6 +94,7 @@ impl MemoryApparatusGroupStore {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl ApparatusGroupStorePort for MemoryApparatusGroupStore {
     async fn groups(&self) -> Result<Vec<ApparatusGroup>, ApparatusGroupError> {
         Ok(self.groups.read().await.clone())
