@@ -47,7 +47,7 @@
 **Files:**
 - Modified files from Tasks 1-3
 
-- [ ] Commit the implementation.
-- [ ] Push `main`.
-- [ ] Build Linux amd64 release through Docker.
-- [ ] Deploy to Fedora and verify service health.
+- [x] Commit the implementation.
+- [x] Push `main`.
+- [x] Build Linux amd64 release through Docker.
+- [x] Deploy to Fedora and verify service health.
