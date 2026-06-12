@@ -19,6 +19,11 @@ pub trait ProductionOrderErpSink: Send + Sync {
     ) -> Result<(), ProductionOrderErpError>;
 }
 
+#[async_trait]
+pub trait ProductionOrderErpSource: Send + Sync {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionOrderErpError>;
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NoopProductionOrderErpSink;
 
@@ -30,6 +35,13 @@ impl ProductionOrderErpSink for NoopProductionOrderErpSink {
         _template: &CalculateOrderTemplate,
     ) -> Result<(), ProductionOrderErpError> {
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ProductionOrderErpSource for NoopProductionOrderErpSink {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionOrderErpError> {
+        Ok(Vec::new())
     }
 }
 
@@ -73,6 +85,48 @@ impl ProductionOrderErpSink for ErpnextClient {
             .production_order_json_request(Method::POST, "/api/resource/Work Order", Some(payload))
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ProductionOrderErpSource for ErpnextClient {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionOrderErpError> {
+        let mut start = 0usize;
+        let mut documents = Vec::new();
+        loop {
+            let response: ListResponse<NameRow> = self
+                .production_order_get(
+                    "/api/resource/Work Order",
+                    &[
+                        ("fields", r#"["name"]"#.to_string()),
+                        (
+                            "filters",
+                            r#"[["Work Order","description","like","%RS map id:%"]]"#.to_string(),
+                        ),
+                        ("limit_start", start.to_string()),
+                        ("limit_page_length", "500".to_string()),
+                    ],
+                )
+                .await?;
+            if response.data.is_empty() {
+                break;
+            }
+            for row in response.data {
+                let document: ResourceResponse<WorkOrderDocument> = self
+                    .production_order_json_request(
+                        Method::GET,
+                        &format!(
+                            "/api/resource/Work Order/{}",
+                            urlencoding::encode(row.name.trim())
+                        ),
+                        None,
+                    )
+                    .await?;
+                documents.push(document.data);
+            }
+            start += 500;
+        }
+        Ok(work_order_documents_to_maps(documents))
     }
 }
 
@@ -431,6 +485,156 @@ struct WarehouseRow {
     company: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct WorkOrderDocument {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    production_item: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    operations: Vec<WorkOrderOperationRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkOrderOperationRow {
+    #[serde(default)]
+    workstation: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    sequence_id: i64,
+    #[serde(default)]
+    batch_size: f64,
+}
+
+fn work_order_document_to_map(document: WorkOrderDocument) -> Option<ProductionMapDefinition> {
+    let map_id = description_value(&document.description, "RS map id:")?;
+    if map_id.trim().is_empty() {
+        return None;
+    }
+    let order_number = description_value(&document.description, "Zakaz:")
+        .unwrap_or_else(|| document.name.trim().to_string())
+        .trim_start_matches('/')
+        .trim()
+        .to_string();
+    let title = description_value(&document.description, "Mahsulot:")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| document.production_item.trim().to_string());
+    let mut operations = document
+        .operations
+        .into_iter()
+        .filter(|operation| !operation.workstation.trim().is_empty())
+        .collect::<Vec<_>>();
+    operations.sort_by(|left, right| {
+        left.sequence_id
+            .cmp(&right.sequence_id)
+            .then_with(|| left.workstation.cmp(&right.workstation))
+    });
+    let roll_count = operations
+        .iter()
+        .find_map(|operation| (operation.batch_size > 0.0).then_some(operation.batch_size));
+    let width_mm = operations
+        .iter()
+        .find_map(|operation| description_number(&operation.description, "Material razmer:"));
+    let mut nodes = vec![
+        work_order_node("start", ProductionMapNodeKind::Start, "Start", 0.0, 0.0),
+        work_order_node("task", ProductionMapNodeKind::Task, &title, 0.0, 120.0),
+    ];
+    for (index, operation) in operations.iter().enumerate() {
+        nodes.push(work_order_node(
+            &format!("apparatus-{}", index + 1),
+            ProductionMapNodeKind::Apparatus,
+            operation.workstation.trim(),
+            0.0,
+            240.0 + (index as f64 * 120.0),
+        ));
+    }
+    nodes.push(work_order_node(
+        "end",
+        ProductionMapNodeKind::End,
+        &title,
+        0.0,
+        240.0 + (operations.len() as f64 * 120.0),
+    ));
+    let mut edges = vec![work_order_edge("start", "task")];
+    let mut previous = "task".to_string();
+    for index in 0..operations.len() {
+        let next = format!("apparatus-{}", index + 1);
+        edges.push(work_order_edge(&previous, &next));
+        previous = next;
+    }
+    edges.push(work_order_edge(&previous, "end"));
+    Some(ProductionMapDefinition {
+        id: map_id.trim().to_string(),
+        product_code: document.production_item.trim().to_string(),
+        title,
+        code: order_number.clone(),
+        order_number,
+        roll_count,
+        width_mm,
+        nodes,
+        edges,
+    })
+}
+
+fn work_order_documents_to_maps(documents: Vec<WorkOrderDocument>) -> Vec<ProductionMapDefinition> {
+    documents
+        .into_iter()
+        .filter_map(work_order_document_to_map)
+        .collect()
+}
+
+fn description_value(description: &str, key: &str) -> Option<String> {
+    description.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(key)
+            .map(|value| value.trim().to_string())
+    })
+}
+
+fn description_number(description: &str, key: &str) -> Option<f64> {
+    let value = description_value(description, key)?;
+    value
+        .split_whitespace()
+        .next()
+        .and_then(|number| number.parse::<f64>().ok())
+}
+
+fn work_order_node(
+    id: &str,
+    kind: ProductionMapNodeKind,
+    title: &str,
+    x: f64,
+    y: f64,
+) -> ProductionMapNode {
+    ProductionMapNode {
+        id: id.to_string(),
+        kind,
+        title: title.to_string(),
+        formula: None,
+        role_code: String::new(),
+        item_code: String::new(),
+        qty_formula: String::new(),
+        from_location: String::new(),
+        to_location: String::new(),
+        alternative_group_id: String::new(),
+        alternative_group_label: String::new(),
+        alternative_assigned_title: String::new(),
+        x,
+        y,
+    }
+}
+
+fn work_order_edge(from: &str, to: &str) -> crate::core::production_map::ProductionMapEdge {
+    crate::core::production_map::ProductionMapEdge {
+        from: from.to_string(),
+        to: to.to_string(),
+        branch: String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,6 +717,80 @@ mod tests {
         assert!(description.contains("1 qavat: pet 12"));
         assert!(description.contains("2 qavat: pe oq 50"));
         assert!(description.contains("3 qavat: cpp 20"));
+    }
+
+    #[test]
+    fn work_order_document_rebuilds_production_map_for_hybrid_cache() {
+        let document = WorkOrderDocument {
+            name: "MFG-WO-2026-00007".to_string(),
+            production_item: "ITEM-8756".to_string(),
+            description: "Zakaz: /8756\nMahsulot: vitagum vitamin zip paket\nRS map id: zakaz-8756"
+                .to_string(),
+            operations: vec![
+                WorkOrderOperationRow {
+                    workstation: "8 ta rangli pechat - A".to_string(),
+                    description: "Zakaz: /8756\nMaterial razmer: 630 mm\nQolib soni: 7".to_string(),
+                    sequence_id: 1,
+                    batch_size: 7.0,
+                },
+                WorkOrderOperationRow {
+                    workstation: "Laminatsiya 1 - A".to_string(),
+                    description: String::new(),
+                    sequence_id: 2,
+                    batch_size: 7.0,
+                },
+            ],
+        };
+
+        let map = work_order_document_to_map(document).expect("map");
+
+        assert_eq!(map.id, "zakaz-8756");
+        assert_eq!(map.product_code, "ITEM-8756");
+        assert_eq!(map.title, "vitagum vitamin zip paket");
+        assert_eq!(map.code, "8756");
+        assert_eq!(map.order_number, "8756");
+        assert_eq!(map.roll_count, Some(7.0));
+        assert_eq!(map.width_mm, Some(630.0));
+        let apparatus = map
+            .nodes
+            .iter()
+            .filter(|node| node.kind == ProductionMapNodeKind::Apparatus)
+            .map(|node| node.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            apparatus,
+            vec!["8 ta rangli pechat - A", "Laminatsiya 1 - A"]
+        );
+        assert_eq!(map.edges.len(), 4);
+        assert_eq!(map.edges[1].from, "task");
+        assert_eq!(map.edges[1].to, "apparatus-1");
+    }
+
+    #[test]
+    fn work_order_documents_to_maps_skips_non_rs_orders() {
+        let maps = work_order_documents_to_maps(vec![
+            WorkOrderDocument {
+                name: "MFG-WO-1".to_string(),
+                production_item: "ITEM-1".to_string(),
+                description: "Manual ERP order".to_string(),
+                operations: Vec::new(),
+            },
+            WorkOrderDocument {
+                name: "MFG-WO-2".to_string(),
+                production_item: "ITEM-2".to_string(),
+                description: "Zakaz: /222\nMahsulot: test\nRS map id: zakaz-222".to_string(),
+                operations: vec![WorkOrderOperationRow {
+                    workstation: "7 ta rangli pechat - A".to_string(),
+                    description: "Material razmer: 630 mm\nQolib soni: 7".to_string(),
+                    sequence_id: 1,
+                    batch_size: 7.0,
+                }],
+            },
+        ]);
+
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].id, "zakaz-222");
+        assert_eq!(maps[0].product_code, "ITEM-2");
     }
 
     fn node(id: &str, kind: ProductionMapNodeKind, title: &str) -> ProductionMapNode {

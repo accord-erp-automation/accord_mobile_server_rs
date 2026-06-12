@@ -24,7 +24,9 @@ use crate::erpdb::catalog_cache::store::CatalogCacheStore;
 use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_once};
 use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
-use crate::erpnext::production_order::{NoopProductionOrderErpSink, ProductionOrderErpSink};
+use crate::erpnext::production_order::{
+    NoopProductionOrderErpSink, ProductionOrderErpSink, ProductionOrderErpSource,
+};
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -184,6 +186,14 @@ impl AppState {
                 .with_notification_detail_writer(client.clone())
                 .with_supplier_admin_state_lookup(state_store);
             production_orders = client.clone();
+            if erp_work_order_sync_enabled() {
+                let production_order_source: Arc<dyn ProductionOrderErpSource> = client.clone();
+                tokio::spawn(run_erp_work_order_sync_loop(
+                    production_maps.clone(),
+                    production_order_source,
+                    erp_work_order_sync_interval(),
+                ));
+            }
             erp_client = Some(client);
         }
         match config.direct_db_config() {
@@ -348,6 +358,62 @@ fn order_sheets_sync_interval() -> Duration {
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .unwrap_or(60 * 60);
+    Duration::from_secs(seconds)
+}
+
+async fn run_erp_work_order_sync_loop(
+    production_maps: ProductionMapService,
+    production_order_source: Arc<dyn ProductionOrderErpSource>,
+    interval: Duration,
+) {
+    loop {
+        match sync_erp_work_orders_once(production_maps.clone(), production_order_source.clone())
+            .await
+        {
+            Ok(synced) => {
+                tracing::info!(synced, "erpnext work order cache sync completed");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "erpnext work order cache sync failed");
+            }
+        }
+        if interval.is_zero() {
+            break;
+        }
+        sleep(interval).await;
+    }
+}
+
+async fn sync_erp_work_orders_once(
+    production_maps: ProductionMapService,
+    production_order_source: Arc<dyn ProductionOrderErpSource>,
+) -> Result<usize, String> {
+    let maps = production_order_source
+        .maps()
+        .await
+        .map_err(|error| error.to_string())?;
+    let count = maps.len();
+    if count == 0 {
+        return Ok(0);
+    }
+    production_maps
+        .upsert_maps_batch(maps)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(count)
+}
+
+fn erp_work_order_sync_enabled() -> bool {
+    std::env::var("ERP_WORK_ORDER_SYNC_ENABLED")
+        .map(|raw| raw.trim() != "0")
+        .unwrap_or(true)
+}
+
+fn erp_work_order_sync_interval() -> Duration {
+    let seconds = std::env::var("ERP_WORK_ORDER_SYNC_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(60);
     Duration::from_secs(seconds)
 }
 

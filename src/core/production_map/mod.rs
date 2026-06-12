@@ -562,6 +562,26 @@ impl ProductionMapService {
         Ok(ProductionMapSaved { map, program })
     }
 
+    pub async fn upsert_maps_batch(
+        &self,
+        maps: Vec<ProductionMapDefinition>,
+    ) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
+        let mut normalized = Vec::with_capacity(maps.len());
+        let mut saved = Vec::with_capacity(maps.len());
+        for mut map in maps {
+            normalize_map(&mut map);
+            let program = compile_map(&map)?;
+            saved.push(ProductionMapSaved {
+                map: map.clone(),
+                program,
+            });
+            normalized.push(map);
+        }
+        self.store.put_maps_batch(&normalized).await?;
+        self.notify_live();
+        Ok(saved)
+    }
+
     pub async fn raw_map(
         &self,
         map_id: &str,
@@ -1820,6 +1840,60 @@ mod tests {
         assert_eq!(
             service.map("invalid-laminatsiya").await,
             Err(ProductionMapError::LaminatsiyaRubberTooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_maps_batch_keeps_queue_state_and_sequence_cache() {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let service = ProductionMapService::new(store);
+        service
+            .set_apparatus_sequence(
+                "7 ta rangli pechat - A",
+                vec!["zakaz-111".to_string(), "zakaz-222".to_string()],
+            )
+            .await
+            .expect("sequence");
+        service
+            .store
+            .put_apparatus_queue_states(
+                "7 ta rangli pechat - A",
+                BTreeMap::from([("zakaz-111".to_string(), "completed".to_string())]),
+            )
+            .await
+            .expect("queue state");
+        let mut first = sample_map();
+        first.id = "zakaz-111".to_string();
+        first.order_number = "111".to_string();
+        first.code = "111".to_string();
+        let mut second = sample_map();
+        second.id = "zakaz-222".to_string();
+        second.order_number = "222".to_string();
+        second.code = "222".to_string();
+
+        let saved = service
+            .upsert_maps_batch(vec![first, second])
+            .await
+            .expect("batch upsert");
+
+        assert_eq!(saved.len(), 2);
+        assert_eq!(service.maps().await.expect("maps").len(), 2);
+        assert_eq!(
+            service
+                .apparatus_sequences()
+                .await
+                .expect("sequences")
+                .get("7 ta rangli pechat - A"),
+            Some(&vec!["zakaz-111".to_string(), "zakaz-222".to_string()])
+        );
+        assert_eq!(
+            service
+                .apparatus_queue_states()
+                .await
+                .expect("states")
+                .get("7 ta rangli pechat - A")
+                .and_then(|states| states.get("zakaz-111")),
+            Some(&"completed".to_string())
         );
     }
 
