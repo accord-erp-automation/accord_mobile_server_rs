@@ -409,17 +409,25 @@ impl ProductionMapService {
 
     pub async fn maps(&self) -> Result<Vec<ProductionMapSaved>, ProductionMapError> {
         let maps = self.store.maps().await?;
-        maps.into_iter()
-            .map(|mut map| {
-                // Legacy maps saved before `code` existed: expose the order
-                // number as the code so clients never need a fallback.
-                if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
-                    map.code = map.order_number.trim().to_string();
+        let mut saved = Vec::with_capacity(maps.len());
+        for mut map in maps {
+            // Legacy maps saved before `code` existed: expose the order
+            // number as the code so clients never need a fallback.
+            if map.code.trim().is_empty() && !map.order_number.trim().is_empty() {
+                map.code = map.order_number.trim().to_string();
+            }
+            match compile_map(&map) {
+                Ok(program) => saved.push(ProductionMapSaved { map, program }),
+                Err(error) => {
+                    tracing::warn!(
+                        map_id = %map.id,
+                        error = ?error,
+                        "skipping invalid production map in list response"
+                    );
                 }
-                let program = compile_map(&map)?;
-                Ok(ProductionMapSaved { map, program })
-            })
-            .collect()
+            }
+        }
+        Ok(saved)
     }
 
     pub async fn map(
@@ -1755,6 +1763,29 @@ mod tests {
         assert_eq!(
             run_map(&map, 100.0),
             Err(ProductionMapError::InvalidNodeQty("task".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn maps_skips_legacy_invalid_map_without_failing_list() {
+        let store = std::sync::Arc::new(MemoryProductionMapStore::new());
+        let mut valid = sample_map();
+        valid.id = "valid-map".to_string();
+        let mut invalid = sample_map();
+        invalid.id = "invalid-laminatsiya".to_string();
+        invalid.width_mm = Some(1070.0);
+        invalid.nodes[2].title = "Laminatsiya".to_string();
+
+        store.put_map(valid).await.expect("valid insert");
+        store.put_map(invalid).await.expect("invalid legacy insert");
+
+        let service = ProductionMapService::new(store);
+        let maps = service.maps().await.expect("list");
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].map.id, "valid-map");
+        assert_eq!(
+            service.map("invalid-laminatsiya").await,
+            Err(ProductionMapError::LaminatsiyaRubberTooLarge)
         );
     }
 
