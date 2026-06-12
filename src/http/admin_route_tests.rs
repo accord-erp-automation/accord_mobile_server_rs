@@ -27,6 +27,9 @@ use crate::core::session::manager::SessionManager;
 use crate::core::werka::models::{DispatchRecord, SupplierItem};
 use crate::core::werka::ports::{WerkaHomeLookup, WerkaPortError};
 use crate::core::werka::service::WerkaService;
+use crate::erpnext::production_order::{
+    NoopProductionOrderErpSink, ProductionOrderErpError, ProductionOrderErpSink,
+};
 
 #[tokio::test]
 async fn admin_settings_requires_admin_like_go() {
@@ -454,6 +457,47 @@ async fn production_map_save_with_order_saves_map_and_template() {
         .await
         .expect("cleanup");
     assert_eq!(cleanup.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_records_erp_work_order_without_blocking_response() {
+    let sink = Arc::new(FakeProductionOrderSink::fail());
+    let mut state = test_state();
+    state.production_orders = sink.clone();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map_json = pechat_order_map_json("zakaz-7799", "ERP zakaz", "7799", "8 ta rangli pechat");
+    let body = format!(
+        r#"{{
+            "map":{map_json},
+            "template":{{
+                "name":"erp mahsulot",
+                "product":"erp mahsulot",
+                "item_code":"ITEM-ERP",
+                "width_mm":650,
+                "waste_percent":5,
+                "roll_count":7,
+                "first_layer_material":"pet",
+                "first_layer_micron":"12",
+                "second_layer_material":"pe oq",
+                "second_layer_micron":"30",
+                "kg":500
+            }}
+        }}"#
+    );
+
+    let response = build_router(state)
+        .oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        ))
+        .await
+        .expect("save with order");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1168,6 +1212,39 @@ impl CalculateOrderStorePort for FailCalculateUpsertStore {
 
     async fn delete(&self, _owner_key: &str, _id: &str) -> Result<(), CalculateOrderError> {
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct FakeProductionOrderSink {
+    calls: AtomicUsize,
+    fail: bool,
+}
+
+impl FakeProductionOrderSink {
+    fn fail() -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            fail: true,
+        }
+    }
+}
+
+#[async_trait]
+impl ProductionOrderErpSink for FakeProductionOrderSink {
+    async fn save_order(
+        &self,
+        _map: &crate::core::production_map::ProductionMapDefinition,
+        _template: &CalculateOrderTemplate,
+    ) -> Result<(), ProductionOrderErpError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            Err(ProductionOrderErpError::WriteFailed(
+                "forced failure".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -2743,6 +2820,7 @@ fn test_state() -> AppState {
         .with_state_port(Arc::new(FakeAdminStatePort::new()));
     state.production_maps = ProductionMapService::new(Arc::new(MemoryProductionMapStore::new()));
     state.apparatus_groups = ApparatusGroupService::new(Arc::new(MemoryApparatusGroupStore::new()));
+    state.production_orders = Arc::new(NoopProductionOrderErpSink);
     state
 }
 

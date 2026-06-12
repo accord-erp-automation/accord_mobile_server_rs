@@ -149,6 +149,16 @@ pub async fn production_map_save_with_order(
     {
         tracing::warn!(?error, map_id = %saved_map.map.id, "google sheets order append failed");
     }
+    if previous.is_none()
+        && is_sheet_order_map(&saved_map.map)
+        && let Some(template) = saved_template.as_ref()
+        && let Err(error) = state
+            .production_orders
+            .save_order(&saved_map.map, template)
+            .await
+    {
+        tracing::warn!(?error, map_id = %saved_map.map.id, "erp work order append failed");
+    }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "saved": saved_map,

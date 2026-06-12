@@ -24,6 +24,7 @@ use crate::erpdb::catalog_cache::store::CatalogCacheStore;
 use crate::erpdb::catalog_cache::sync::{sync_catalog_delta_once, sync_catalog_once};
 use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
+use crate::erpnext::production_order::{NoopProductionOrderErpSink, ProductionOrderErpSink};
 use crate::fcm::discover_push_sender;
 use crate::google_sheets::{OrderSheetSink, discover_order_sheet_sink};
 use crate::rps::RpsDriverClient;
@@ -52,6 +53,7 @@ pub struct AppState {
     pub apparatus_groups: ApparatusGroupService,
     pub calculate_orders: Arc<dyn CalculateOrderStorePort>,
     pub order_sheets: Arc<dyn OrderSheetSink>,
+    pub production_orders: Arc<dyn ProductionOrderErpSink>,
     pub calculate_order_image_dir: Arc<std::path::PathBuf>,
     pub push: PushService,
     pub gscale: GscaleService,
@@ -77,6 +79,8 @@ impl AppState {
         )));
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
         let order_sheets = discover_order_sheet_sink();
+        let mut production_orders: Arc<dyn ProductionOrderErpSink> =
+            Arc::new(NoopProductionOrderErpSink);
         if order_sheets.enabled() {
             tokio::spawn(run_order_sheets_sync_loop(
                 production_maps.clone(),
@@ -179,6 +183,7 @@ impl AppState {
                 .with_confirm_writer(client.clone())
                 .with_notification_detail_writer(client.clone())
                 .with_supplier_admin_state_lookup(state_store);
+            production_orders = client.clone();
             erp_client = Some(client);
         }
         match config.direct_db_config() {
@@ -276,6 +281,7 @@ impl AppState {
             apparatus_groups,
             calculate_orders,
             order_sheets,
+            production_orders,
             calculate_order_image_dir,
             push,
             gscale,
