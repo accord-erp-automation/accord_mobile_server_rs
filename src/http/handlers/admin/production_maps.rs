@@ -103,6 +103,10 @@ pub async fn production_map_save_with_order(
     if let Some(template) = &input.template {
         validate_template(template).map_err(calculate_order_error)?;
     }
+    let opens_quick_template_as_order = input
+        .template
+        .as_ref()
+        .is_some_and(|template| is_quick_template_order_clone(&input.map, template));
     let owner_key = principal_owner_key(&principal);
     let map_id = input.map.id.trim().to_string();
     let previous = state
@@ -115,25 +119,31 @@ pub async fn production_map_save_with_order(
         .upsert_map(input.map)
         .await
         .map_err(production_map_error)?;
+    let mut integration_template = None;
     let saved_template = match input.template {
         Some(mut template) => {
-            template.source_map_id = saved_map.map.id.trim().to_string();
-            match state
-                .calculate_orders
-                .upsert(&owner_key, template)
-                .await
-                .map_err(calculate_order_error)
-            {
-                Ok(saved_template) => Some(saved_template),
-                Err(error) => {
-                    if let Err(rollback_error) = state
-                        .production_maps
-                        .restore_map(previous.as_ref(), &map_id)
-                        .await
-                    {
-                        tracing::error!(?rollback_error, "with-order map rollback failed");
+            if opens_quick_template_as_order {
+                integration_template = Some(template);
+                None
+            } else {
+                template.source_map_id = saved_map.map.id.trim().to_string();
+                match state
+                    .calculate_orders
+                    .upsert(&owner_key, template)
+                    .await
+                    .map_err(calculate_order_error)
+                {
+                    Ok(saved_template) => Some(saved_template),
+                    Err(error) => {
+                        if let Err(rollback_error) = state
+                            .production_maps
+                            .restore_map(previous.as_ref(), &map_id)
+                            .await
+                        {
+                            tracing::error!(?rollback_error, "with-order map rollback failed");
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
                 }
             }
         }
@@ -141,29 +151,40 @@ pub async fn production_map_save_with_order(
     };
     if previous.is_none()
         && is_sheet_order_map(&saved_map.map)
-        && let Some(template) = saved_template.as_ref()
-        && let Err(error) = state
-            .order_sheets
-            .append_order(&saved_map.map, template)
-            .await
+        && let Some(template) = saved_template
+            .clone()
+            .or_else(|| integration_template.as_ref().cloned())
     {
-        tracing::warn!(?error, map_id = %saved_map.map.id, "google sheets order append failed");
-    }
-    if previous.is_none()
-        && is_sheet_order_map(&saved_map.map)
-        && let Some(template) = saved_template.as_ref()
-        && let Err(error) = state
-            .production_orders
-            .save_order(&saved_map.map, template)
-            .await
-    {
-        tracing::warn!(?error, map_id = %saved_map.map.id, "erp work order append failed");
+        spawn_order_integrations(state.clone(), saved_map.map.clone(), template);
     }
     Ok(json_response(serde_json::json!({
         "ok": true,
         "saved": saved_map,
         "template": saved_template,
     })))
+}
+
+fn is_quick_template_order_clone(
+    map: &ProductionMapDefinition,
+    template: &CalculateOrderTemplate,
+) -> bool {
+    let source_map_id = template.source_map_id.trim();
+    !source_map_id.is_empty() && source_map_id != map.id.trim() && is_sheet_order_map(map)
+}
+
+fn spawn_order_integrations(
+    state: AppState,
+    map: ProductionMapDefinition,
+    template: CalculateOrderTemplate,
+) {
+    tokio::spawn(async move {
+        if let Err(error) = state.order_sheets.append_order(&map, &template).await {
+            tracing::warn!(?error, map_id = %map.id, "google sheets order append failed");
+        }
+        if let Err(error) = state.production_orders.save_order(&map, &template).await {
+            tracing::warn!(?error, map_id = %map.id, "erp work order append failed");
+        }
+    });
 }
 
 #[derive(serde::Deserialize)]

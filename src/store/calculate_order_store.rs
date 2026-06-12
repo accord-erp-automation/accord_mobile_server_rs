@@ -365,12 +365,7 @@ fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrde
     let mut seen = BTreeSet::new();
     let mut result = Vec::with_capacity(templates.len());
     for template in templates {
-        let code = normalize_key(&template.code);
-        let key = if code.is_empty() {
-            format!("id:{}", template.id.trim())
-        } else {
-            format!("code:{code}")
-        };
+        let key = quick_template_key(&template);
         if key == "id:" || seen.insert(key) {
             result.push(template);
         }
@@ -378,8 +373,64 @@ fn dedupe_templates(templates: Vec<CalculateOrderTemplate>) -> Vec<CalculateOrde
     result
 }
 
+fn quick_template_key(template: &CalculateOrderTemplate) -> String {
+    let product_key = [
+        template.item_code.as_str(),
+        template.product.as_str(),
+        template.name.as_str(),
+    ]
+    .into_iter()
+    .map(normalize_key)
+    .find(|value| !value.is_empty())
+    .unwrap_or_default();
+    if product_key.is_empty() {
+        return legacy_template_key(template);
+    }
+    [
+        "quick".to_string(),
+        normalize_key(&template.customer_ref),
+        normalize_key(&template.customer),
+        product_key,
+        normalize_key(&template.status),
+        normalize_key(&template.material_display),
+        normalize_key(&template.color),
+        number_key(template.width_mm),
+        number_key(template.waste_percent),
+        option_number_key(template.roll_count),
+        normalize_key(&template.first_layer_material),
+        normalize_key(&template.first_layer_micron),
+        normalize_key(&template.second_layer_material),
+        normalize_key(&template.second_layer_micron),
+        normalize_key(&template.third_layer_material),
+        normalize_key(&template.third_layer_micron),
+        normalize_key(&template.note),
+    ]
+    .join("|")
+}
+
+fn legacy_template_key(template: &CalculateOrderTemplate) -> String {
+    let code = normalize_key(&template.code);
+    if code.is_empty() {
+        format!("id:{}", template.id.trim())
+    } else {
+        format!("code:{code}")
+    }
+}
+
 fn normalize_key(value: &str) -> String {
     value.trim().to_lowercase()
+}
+
+fn number_key(value: f64) -> String {
+    if value.is_finite() {
+        format!("{value:.3}")
+    } else {
+        String::new()
+    }
+}
+
+fn option_number_key(value: Option<f64>) -> String {
+    value.map(number_key).unwrap_or_default()
 }
 
 fn new_id() -> String {
@@ -485,16 +536,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calculate_order_sqlite_store_allows_same_name_with_different_codes() {
+    async fn calculate_order_sqlite_store_dedupes_same_quick_template_across_order_codes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = CalculateOrderStore::new(dir.path().join("orders.sqlite"));
 
         let base = CalculateOrderTemplate {
             id: String::new(),
-            code: String::new(),
+            code: "1111".to_string(),
             name: "Qurt".to_string(),
             saved_at: String::new(),
-            order_number: String::new(),
+            order_number: "1111".to_string(),
             customer_ref: String::new(),
             customer: String::new(),
             item_code: "QURT-001".to_string(),
@@ -517,23 +568,32 @@ mod tests {
             third_layer_material: String::new(),
             third_layer_micron: String::new(),
             note: String::new(),
-            kg: 0.0,
-            source_map_id: String::new(),
+            kg: 500.0,
+            source_map_id: "zakaz-1111".to_string(),
         };
 
         let first = store
             .upsert("admin:admin", base.clone())
             .await
             .expect("first save");
+        let duplicate = CalculateOrderTemplate {
+            code: "2222".to_string(),
+            order_number: "2222".to_string(),
+            kg: 900.0,
+            source_map_id: "zakaz-2222".to_string(),
+            ..base
+        };
         let second = store
-            .upsert("admin:admin", base)
+            .upsert("admin:admin", duplicate)
             .await
             .expect("second save");
 
         assert_ne!(first.code, second.code);
         assert_eq!(first.name, "Qurt");
         assert_eq!(second.name, "Qurt");
-        assert_eq!(store.list("admin:admin").await.expect("list").len(), 2);
+        let rows = store.list("admin:admin").await.expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].code, second.code);
 
         let updated = store
             .upsert(

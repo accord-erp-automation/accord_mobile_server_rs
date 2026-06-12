@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
@@ -461,7 +462,9 @@ async fn production_map_save_with_order_saves_map_and_template() {
 
 #[tokio::test]
 async fn production_map_save_with_order_records_erp_work_order_without_blocking_response() {
-    let sink = Arc::new(FakeProductionOrderSink::fail());
+    let sink = Arc::new(FakeProductionOrderSink::fail_after(Duration::from_millis(
+        200,
+    )));
     let mut state = test_state();
     state.production_orders = sink.clone();
     let token = session(&state, PrincipalRole::Admin).await;
@@ -486,7 +489,54 @@ async fn production_map_save_with_order_records_erp_work_order_without_blocking_
         }}"#
     );
 
-    let response = build_router(state)
+    let response = tokio::time::timeout(
+        Duration::from_millis(75),
+        build_router(state).oneshot(request_with_body(
+            "PUT",
+            "/v1/mobile/admin/production-maps/with-order",
+            &token,
+            &body,
+        )),
+    )
+    .await
+    .expect("response must not wait for erp write")
+    .expect("save with order");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn production_map_save_with_order_does_not_store_cloned_order_as_quick_template() {
+    let state = test_state();
+    let token = session(&state, PrincipalRole::Admin).await;
+
+    let map_json = pechat_order_map_json("zakaz-5555", "Dolce order", "5555", "8 ta rangli pechat");
+    let body = format!(
+        r#"{{
+            "map":{map_json},
+            "template":{{
+                "id":"",
+                "code":"5555",
+                "order_number":"5555",
+                "name":"dolce cake",
+                "product":"dolce cake",
+                "item_code":"DOLCE-001",
+                "source_map_id":"quick-dolce-map",
+                "width_mm":730,
+                "waste_percent":5,
+                "roll_count":7,
+                "first_layer_material":"pet",
+                "first_layer_micron":"12",
+                "second_layer_material":"pe oq",
+                "second_layer_micron":"50",
+                "kg":500
+            }}
+        }}"#
+    );
+
+    let response = build_router(state.clone())
         .oneshot(request_with_body(
             "PUT",
             "/v1/mobile/admin/production-maps/with-order",
@@ -497,7 +547,19 @@ async fn production_map_save_with_order_records_erp_work_order_without_blocking_
         .expect("save with order");
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(sink.calls.load(Ordering::SeqCst), 1);
+    let value = json_body(response).await;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["saved"]["map"]["id"], "zakaz-5555");
+    assert!(value["template"].is_null());
+
+    let list_response = build_router(state)
+        .oneshot(request("GET", "/v1/mobile/calculate/orders", &token))
+        .await
+        .expect("list calculate orders");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_value = json_body(list_response).await;
+    let rows = list_value["templates"].as_array().expect("templates array");
+    assert!(rows.iter().all(|row| row["code"] != "5555"));
 }
 
 #[tokio::test]
@@ -1219,13 +1281,15 @@ impl CalculateOrderStorePort for FailCalculateUpsertStore {
 struct FakeProductionOrderSink {
     calls: AtomicUsize,
     fail: bool,
+    delay: Option<Duration>,
 }
 
 impl FakeProductionOrderSink {
-    fn fail() -> Self {
+    fn fail_after(delay: Duration) -> Self {
         Self {
             calls: AtomicUsize::new(0),
             fail: true,
+            delay: Some(delay),
         }
     }
 }
@@ -1238,6 +1302,9 @@ impl ProductionOrderErpSink for FakeProductionOrderSink {
         _template: &CalculateOrderTemplate,
     ) -> Result<(), ProductionOrderErpError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(delay) = self.delay {
+            tokio::time::sleep(delay).await;
+        }
         if self.fail {
             Err(ProductionOrderErpError::WriteFailed(
                 "forced failure".to_string(),
