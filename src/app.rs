@@ -77,6 +77,14 @@ impl AppState {
         )));
         let calculate_orders = Arc::new(CalculateOrderStore::new(calculate_order_store_path()));
         let order_sheets = discover_order_sheet_sink();
+        if order_sheets.enabled() {
+            tokio::spawn(run_order_sheets_sync_loop(
+                production_maps.clone(),
+                calculate_orders.clone(),
+                order_sheets.clone(),
+                order_sheets_sync_interval(),
+            ));
+        }
         let calculate_order_image_dir = Arc::new(calculate_order_image_dir());
         let push_token_store = build_push_token_store(&config);
         let mut profiles = ProfileService::new(config.erp_url.clone()).with_store(profile_store);
@@ -277,6 +285,64 @@ impl AppState {
             sessions,
         }
     }
+}
+
+async fn run_order_sheets_sync_loop(
+    production_maps: ProductionMapService,
+    calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    order_sheets: Arc<dyn OrderSheetSink>,
+    interval: Duration,
+) {
+    loop {
+        match sync_order_sheets_once(
+            production_maps.clone(),
+            calculate_orders.clone(),
+            order_sheets.clone(),
+        )
+        .await
+        {
+            Ok(appended) => {
+                tracing::info!(appended, "google sheets order sync completed");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "google sheets order sync failed");
+            }
+        }
+        if interval.is_zero() {
+            break;
+        }
+        sleep(interval).await;
+    }
+}
+
+async fn sync_order_sheets_once(
+    production_maps: ProductionMapService,
+    calculate_orders: Arc<dyn CalculateOrderStorePort>,
+    order_sheets: Arc<dyn OrderSheetSink>,
+) -> Result<usize, String> {
+    let maps = production_maps
+        .maps()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|saved| saved.map)
+        .collect::<Vec<_>>();
+    let templates = calculate_orders
+        .list_all()
+        .await
+        .map_err(|error| error.to_string())?;
+    order_sheets
+        .sync_orders(&maps, &templates)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn order_sheets_sync_interval() -> Duration {
+    let seconds = std::env::var("GOOGLE_SHEETS_ORDER_SYNC_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(60 * 60);
+    Duration::from_secs(seconds)
 }
 
 async fn run_catalog_cache_sync_loop(

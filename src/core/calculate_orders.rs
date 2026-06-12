@@ -78,6 +78,9 @@ pub trait CalculateOrderStorePort: Send + Sync {
         &self,
         owner_key: &str,
     ) -> Result<Vec<CalculateOrderTemplate>, CalculateOrderError>;
+    async fn list_all(&self) -> Result<Vec<CalculateOrderTemplate>, CalculateOrderError> {
+        Err(CalculateOrderError::StoreFailed)
+    }
     async fn upsert(
         &self,
         owner_key: &str,

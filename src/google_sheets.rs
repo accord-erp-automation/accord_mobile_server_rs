@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,11 +17,25 @@ const DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 
 #[async_trait]
 pub trait OrderSheetSink: Send + Sync {
+    fn enabled(&self) -> bool {
+        false
+    }
+
     async fn append_order(
         &self,
         map: &ProductionMapDefinition,
         template: &CalculateOrderTemplate,
     ) -> Result<(), OrderSheetError>;
+
+    async fn sync_orders(
+        &self,
+        maps: &[ProductionMapDefinition],
+        templates: &[CalculateOrderTemplate],
+    ) -> Result<usize, OrderSheetError> {
+        let _ = maps;
+        let _ = templates;
+        Ok(0)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +60,8 @@ pub enum OrderSheetError {
     AuthFailed,
     #[error("google sheets append failed")]
     AppendFailed,
+    #[error("google sheets read failed")]
+    ReadFailed,
 }
 
 pub fn discover_order_sheet_sink() -> Arc<dyn OrderSheetSink> {
@@ -109,7 +126,8 @@ fn discover_service_account_path() -> Option<std::path::PathBuf> {
 struct GoogleSheetsOrderSink {
     http_client: reqwest::Client,
     token_provider: ServiceAccountTokenProvider,
-    endpoint: String,
+    append_endpoint: String,
+    read_endpoint: String,
 }
 
 impl GoogleSheetsOrderSink {
@@ -121,26 +139,48 @@ impl GoogleSheetsOrderSink {
                 .build()
                 .expect("reqwest client"),
             token_provider: ServiceAccountTokenProvider::new(account),
-            endpoint: format!(
+            append_endpoint: format!(
                 "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS"
+            ),
+            read_endpoint: format!(
+                "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}"
             ),
         }
     }
-}
 
-#[async_trait]
-impl OrderSheetSink for GoogleSheetsOrderSink {
-    async fn append_order(
+    async fn existing_codes(
         &self,
-        map: &ProductionMapDefinition,
-        template: &CalculateOrderTemplate,
-    ) -> Result<(), OrderSheetError> {
-        let row = order_sheet_row(map, template).ok_or(OrderSheetError::NoRow)?;
-        let access_token = self.token_provider.access_token(&self.http_client).await?;
-        let payload = AppendValuesRequest { values: vec![row] };
+        access_token: &str,
+    ) -> Result<BTreeSet<String>, OrderSheetError> {
         let response = self
             .http_client
-            .post(&self.endpoint)
+            .get(&self.read_endpoint)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|_| OrderSheetError::ReadFailed)?;
+        if !response.status().is_success() {
+            return Err(OrderSheetError::ReadFailed);
+        }
+        let values: SheetValuesResponse = response
+            .json()
+            .await
+            .map_err(|_| OrderSheetError::ReadFailed)?;
+        Ok(sheet_codes(values.values))
+    }
+
+    async fn append_rows(
+        &self,
+        access_token: &str,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<(), OrderSheetError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let payload = AppendValuesRequest { values: rows };
+        let response = self
+            .http_client
+            .post(&self.append_endpoint)
             .bearer_auth(access_token)
             .json(&payload)
             .send()
@@ -151,6 +191,41 @@ impl OrderSheetSink for GoogleSheetsOrderSink {
         } else {
             Err(OrderSheetError::AppendFailed)
         }
+    }
+}
+
+#[async_trait]
+impl OrderSheetSink for GoogleSheetsOrderSink {
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    async fn append_order(
+        &self,
+        map: &ProductionMapDefinition,
+        template: &CalculateOrderTemplate,
+    ) -> Result<(), OrderSheetError> {
+        let row = order_sheet_row(map, template).ok_or(OrderSheetError::NoRow)?;
+        let access_token = self.token_provider.access_token(&self.http_client).await?;
+        let existing_codes = self.existing_codes(&access_token).await?;
+        let code = row_code(&row);
+        if existing_codes.contains(&code) {
+            return Ok(());
+        }
+        self.append_rows(&access_token, vec![row]).await
+    }
+
+    async fn sync_orders(
+        &self,
+        maps: &[ProductionMapDefinition],
+        templates: &[CalculateOrderTemplate],
+    ) -> Result<usize, OrderSheetError> {
+        let access_token = self.token_provider.access_token(&self.http_client).await?;
+        let existing_codes = self.existing_codes(&access_token).await?;
+        let rows = missing_order_rows(maps, templates, &existing_codes);
+        let count = rows.len();
+        self.append_rows(&access_token, rows).await?;
+        Ok(count)
     }
 }
 
@@ -219,6 +294,61 @@ fn order_sheet_row(
             .unwrap_or_else(|| Value::String(String::new())),
         json_number(f64::from(calculation.rubber_size_mm)),
     ])
+}
+
+pub fn missing_order_rows(
+    maps: &[ProductionMapDefinition],
+    templates: &[CalculateOrderTemplate],
+    existing_codes: &BTreeSet<String>,
+) -> Vec<Vec<Value>> {
+    let mut seen = existing_codes.clone();
+    let mut rows = Vec::new();
+    for map in maps {
+        if !is_sheet_order_map(map) {
+            continue;
+        }
+        let Some(template) = templates.iter().find(|template| {
+            template.source_map_id.trim() == map.id.trim()
+                || template.order_number.trim() == map.order_number.trim()
+                || template.code.trim() == map.code.trim()
+        }) else {
+            continue;
+        };
+        let Some(row) = order_sheet_row(map, template) else {
+            continue;
+        };
+        let code = row_code(&row);
+        if seen.insert(code) {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+fn sheet_codes(values: Vec<Vec<Value>>) -> BTreeSet<String> {
+    values
+        .into_iter()
+        .filter_map(|row| row.get(3).and_then(value_text).map(normalize_sheet_code))
+        .filter(|code| !code.is_empty())
+        .collect()
+}
+
+fn row_code(row: &[Value]) -> String {
+    row.get(3)
+        .and_then(value_text)
+        .map(normalize_sheet_code)
+        .unwrap_or_default()
+}
+
+fn value_text(value: &Value) -> Option<&str> {
+    match value {
+        Value::String(value) => Some(value.as_str()),
+        _ => None,
+    }
+}
+
+fn normalize_sheet_code(value: &str) -> String {
+    value.trim().trim_start_matches('/').trim().to_string()
 }
 
 fn sheet_press_marker(map: &ProductionMapDefinition, template: &CalculateOrderTemplate) -> String {
@@ -394,6 +524,12 @@ struct AppendValuesRequest {
     values: Vec<Vec<Value>>,
 }
 
+#[derive(Deserialize)]
+struct SheetValuesResponse {
+    #[serde(default)]
+    values: Vec<Vec<Value>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +627,71 @@ mod tests {
 
         assert_eq!(row[0], Value::String("F".to_string()));
         assert_eq!(row[3], Value::String("/1123".to_string()));
+    }
+
+    #[test]
+    fn missing_order_rows_skips_existing_sheet_codes() {
+        let maps = vec![
+            test_map("zakaz-7775", "7775", "8 ta rangli pechat"),
+            test_map("zakaz-7776", "7776", "7 ta rangli pechat"),
+        ];
+        let templates = vec![
+            test_template("zakaz-7775", "7775"),
+            test_template("zakaz-7776", "7776"),
+        ];
+        let existing = BTreeSet::from(["7775".to_string()]);
+
+        let rows = missing_order_rows(&maps, &templates, &existing);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][3], Value::String("/7776".to_string()));
+    }
+
+    fn test_map(id: &str, order_number: &str, apparatus: &str) -> ProductionMapDefinition {
+        ProductionMapDefinition {
+            id: id.to_string(),
+            product_code: "ITEM-1".to_string(),
+            title: "Test order".to_string(),
+            code: order_number.to_string(),
+            order_number: order_number.to_string(),
+            roll_count: Some(7.0),
+            width_mm: Some(650.0),
+            nodes: vec![ProductionMapNode {
+                id: "apparatus".to_string(),
+                kind: ProductionMapNodeKind::Apparatus,
+                title: apparatus.to_string(),
+                formula: None,
+                role_code: String::new(),
+                item_code: String::new(),
+                qty_formula: String::new(),
+                from_location: String::new(),
+                to_location: String::new(),
+                alternative_group_id: String::new(),
+                alternative_group_label: String::new(),
+                alternative_assigned_title: String::new(),
+                x: 0.0,
+                y: 0.0,
+            }],
+            edges: Vec::new(),
+        }
+    }
+
+    fn test_template(source_map_id: &str, order_number: &str) -> CalculateOrderTemplate {
+        CalculateOrderTemplate {
+            code: order_number.to_string(),
+            order_number: order_number.to_string(),
+            source_map_id: source_map_id.to_string(),
+            name: "Test order".to_string(),
+            product: "Test order".to_string(),
+            width_mm: 650.0,
+            waste_percent: 5.0,
+            roll_count: Some(7.0),
+            first_layer_material: "pet".to_string(),
+            first_layer_micron: "12".to_string(),
+            second_layer_material: "pe oq".to_string(),
+            second_layer_micron: "30".to_string(),
+            kg: 500.0,
+            ..CalculateOrderTemplate::default()
+        }
     }
 }

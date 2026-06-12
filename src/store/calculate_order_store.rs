@@ -70,6 +70,31 @@ impl CalculateOrderStorePort for CalculateOrderStore {
             .map_err(|_| CalculateOrderError::StoreFailed)
     }
 
+    async fn list_all(&self) -> Result<Vec<CalculateOrderTemplate>, CalculateOrderError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload_json
+                 FROM calculate_order_templates
+                 ORDER BY saved_at DESC",
+            )
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let payload: String = row.get(0)?;
+                let template = serde_json::from_str::<CalculateOrderTemplate>(&payload)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+                Ok(template)
+            })
+            .map_err(|_| CalculateOrderError::StoreFailed)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map(dedupe_templates)
+            .map_err(|_| CalculateOrderError::StoreFailed)
+    }
+
     async fn upsert(
         &self,
         owner_key: &str,
