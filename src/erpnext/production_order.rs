@@ -8,6 +8,7 @@ use crate::core::formula::{CalculateRequest, LayerInput, calculate};
 use crate::core::production_map::{
     ProductionMapDefinition, ProductionMapNode, ProductionMapNodeKind,
 };
+use crate::erpdb::reader::DirectDbReader;
 use crate::erpnext::client::ErpnextClient;
 
 #[async_trait]
@@ -125,6 +126,60 @@ impl ProductionOrderErpSource for ErpnextClient {
                 documents.push(document.data);
             }
             start += 500;
+        }
+        Ok(work_order_documents_to_maps(documents))
+    }
+}
+
+#[async_trait]
+impl ProductionOrderErpSource for DirectDbReader {
+    async fn maps(&self) -> Result<Vec<ProductionMapDefinition>, ProductionOrderErpError> {
+        let headers = sqlx::query_as::<_, WorkOrderHeaderDbRow>(
+            r#"
+            SELECT
+                COALESCE(name, '') AS name,
+                COALESCE(production_item, '') AS production_item,
+                COALESCE(description, '') AS description
+            FROM `tabWork Order`
+            WHERE COALESCE(description, '') LIKE '%RS map id:%'
+            ORDER BY modified DESC, name DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| ProductionOrderErpError::WriteFailed(error.to_string()))?;
+        let mut documents = Vec::with_capacity(headers.len());
+        for header in headers {
+            let operations = sqlx::query_as::<_, WorkOrderOperationDbRow>(
+                r#"
+                SELECT
+                    COALESCE(workstation, '') AS workstation,
+                    COALESCE(description, '') AS description,
+                    CAST(COALESCE(sequence_id, idx, 0) AS SIGNED) AS sequence_id,
+                    CAST(COALESCE(batch_size, 0) AS DOUBLE) AS batch_size
+                FROM `tabWork Order Operation`
+                WHERE parent = ?
+                ORDER BY sequence_id ASC, idx ASC, name ASC
+                "#,
+            )
+            .bind(&header.name)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| ProductionOrderErpError::WriteFailed(error.to_string()))?;
+            documents.push(WorkOrderDocument {
+                name: header.name,
+                production_item: header.production_item,
+                description: header.description,
+                operations: operations
+                    .into_iter()
+                    .map(|operation| WorkOrderOperationRow {
+                        workstation: operation.workstation,
+                        description: operation.description,
+                        sequence_id: operation.sequence_id,
+                        batch_size: operation.batch_size,
+                    })
+                    .collect(),
+            });
         }
         Ok(work_order_documents_to_maps(documents))
     }
@@ -506,6 +561,21 @@ struct WorkOrderOperationRow {
     #[serde(default)]
     sequence_id: i64,
     #[serde(default)]
+    batch_size: f64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct WorkOrderHeaderDbRow {
+    name: String,
+    production_item: String,
+    description: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct WorkOrderOperationDbRow {
+    workstation: String,
+    description: String,
+    sequence_id: i64,
     batch_size: f64,
 }
 

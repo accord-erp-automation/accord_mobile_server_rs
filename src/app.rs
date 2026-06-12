@@ -83,6 +83,7 @@ impl AppState {
         let order_sheets = discover_order_sheet_sink();
         let mut production_orders: Arc<dyn ProductionOrderErpSink> =
             Arc::new(NoopProductionOrderErpSink);
+        let mut production_order_source: Option<Arc<dyn ProductionOrderErpSource>> = None;
         if order_sheets.enabled() {
             tokio::spawn(run_order_sheets_sync_loop(
                 production_maps.clone(),
@@ -186,14 +187,7 @@ impl AppState {
                 .with_notification_detail_writer(client.clone())
                 .with_supplier_admin_state_lookup(state_store);
             production_orders = client.clone();
-            if erp_work_order_sync_enabled() {
-                let production_order_source: Arc<dyn ProductionOrderErpSource> = client.clone();
-                tokio::spawn(run_erp_work_order_sync_loop(
-                    production_maps.clone(),
-                    production_order_source,
-                    erp_work_order_sync_interval(),
-                ));
-            }
+            production_order_source = Some(client.clone());
             erp_client = Some(client);
         }
         match config.direct_db_config() {
@@ -208,6 +202,7 @@ impl AppState {
                 if let Some(client) = &erp_client {
                     client.set_credential_provider(direct_reader.clone());
                 }
+                production_order_source = Some(direct_reader.clone());
                 let catalog_reader = if config.catalog_cache_enabled {
                     match CatalogCacheStore::open(&config.catalog_cache_path) {
                         Ok(store) => {
@@ -279,6 +274,15 @@ impl AppState {
             Err(error) => {
                 tracing::warn!(%error, "direct DB read disabled");
             }
+        }
+        if erp_work_order_sync_enabled()
+            && let Some(production_order_source) = production_order_source
+        {
+            tokio::spawn(run_erp_work_order_sync_loop(
+                production_maps.clone(),
+                production_order_source,
+                erp_work_order_sync_interval(),
+            ));
         }
 
         Self {
