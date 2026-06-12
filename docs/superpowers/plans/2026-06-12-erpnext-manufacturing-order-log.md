@@ -40,6 +40,6 @@
 - Modified files from tasks 1-2
 
 - [x] Run `cargo fmt`, `cargo check`, focused tests, and clippy dead-code check.
-- [ ] Commit the changes.
-- [ ] Build linux x86_64 release binary through Docker/OrbStack.
-- [ ] Deploy to Fedora and verify service logs.
+- [x] Commit the changes.
+- [x] Build linux x86_64 release binary through Docker/OrbStack.
+- [x] Deploy to Fedora and verify service logs.
